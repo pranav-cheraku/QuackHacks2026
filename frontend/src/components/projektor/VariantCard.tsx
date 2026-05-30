@@ -9,7 +9,6 @@ export function VariantCard({ v }: { v: Variant }) {
         left: v.x,
         top: v.y,
         width: 160,
-        transform: `rotate(${v.rotation}deg)`,
       }}
     >
       <div

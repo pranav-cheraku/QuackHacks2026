@@ -1,7 +1,6 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { useState } from "react";
 import { TopBar } from "@/components/projektor/TopBar";
-import { StatusBar } from "@/components/projektor/StatusBar";
 import { BoardView } from "@/components/projektor/BoardView";
 import { EditorView } from "@/components/projektor/EditorView";
 
@@ -21,7 +20,7 @@ export const Route = createFileRoute("/")({
 
 function Projektor() {
   const [mode, setMode] = useState<"board" | "editor">("board");
-  const [zoom, setZoom] = useState(0.85);
+  const [zoom, setZoom] = useState(0.92);
   const [editorStart, setEditorStart] = useState<string | null>(null);
 
   return (
@@ -39,14 +38,6 @@ function Projektor() {
       ) : (
         <EditorView startNodeId={editorStart} />
       )}
-      <StatusBar
-        mode={mode}
-        slideCount={6}
-        branchCount={1}
-        zoom={zoom}
-        setZoom={setZoom}
-        deckName="q3-strategy-review.proj"
-      />
     </div>
   );
 }

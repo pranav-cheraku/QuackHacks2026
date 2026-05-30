@@ -11,7 +11,7 @@ import {
   type Variant,
   type ComponentType,
 } from "@/lib/projektor-data";
-import { Maximize2, Minus, Plus, Sparkles, Search } from "lucide-react";
+import { Maximize2, Minus, Plus, Sparkles } from "lucide-react";
 
 interface Props {
   zoom: number;
@@ -113,27 +113,6 @@ export function BoardView({ zoom, setZoom, onOpenEditor }: Props) {
       <ComponentTray />
 
       <div className="flex-1 flex flex-col min-w-0">
-        {/* Secondary toolbar */}
-        <div className="h-9 border-b border-border bg-chrome flex items-center px-4 gap-4 shrink-0">
-          <span className="text-[11px] font-mono uppercase tracking-wider text-muted-foreground">
-            Deck flow
-          </span>
-          <span className="text-[11px] font-mono text-muted-foreground">
-            {nodes.length} slides ·{" "}
-            {new Set(variants.map((v) => v.parentId)).size} branches
-          </span>
-          <button className="text-[11px] font-semibold text-muted-foreground hover:text-ink ml-2">
-            Auto-arrange
-          </button>
-          <div className="ml-auto flex items-center gap-1.5 px-2 py-1 border border-border rounded-md bg-canvas/40 w-56">
-            <Search size={11} className="text-muted-foreground" />
-            <input
-              placeholder="Find a slide..."
-              className="bg-transparent outline-none text-[11px] flex-1 placeholder:text-muted-foreground/70"
-            />
-          </div>
-        </div>
-
         {/* Canvas */}
         <div
           className="flex-1 relative overflow-hidden dot-grid cursor-grab active:cursor-grabbing"
@@ -256,7 +235,7 @@ export function BoardView({ zoom, setZoom, onOpenEditor }: Props) {
             <div className="w-px h-5 bg-border mx-1" />
             <ToolBtn
               onClick={() => {
-                setZoom(0.85);
+                setZoom(0.92);
                 setPan({ x: 0, y: 0 });
               }}
             >

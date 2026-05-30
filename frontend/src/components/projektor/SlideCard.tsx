@@ -65,8 +65,6 @@ export function SlideCard({
         left: node.x,
         top: node.y,
         width: w,
-        transform: `rotate(${node.rotation}deg)`,
-        transformOrigin: "center",
       }}
       onMouseDown={onMouseDown}
       onDoubleClick={onOpenEditor}

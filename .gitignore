@@ -1,0 +1,31 @@
+# Dependencies
+node_modules/
+
+# Build output
+dist/
+.output/
+.vinxi/
+.nitro/
+.tanstack/
+.vite/
+
+# Env / secrets (never commit) — keep a committed .env.example for the team
+.env
+.env.*
+!.env.example
+*.local
+
+# Logs
+*.log
+npm-debug.log*
+
+# OS / editor cruft
+.DS_Store
+*.swp
+.idea/
+
+# Claude Code related
+.claude/
+agent-docs/
+
+docs/

@@ -26,7 +26,7 @@ function Projektor() {
 
   return (
     <div className="h-screen flex flex-col bg-chrome text-ink overflow-hidden">
-      <TopBar mode={mode} setMode={setMode} deckTitle="Q3 Strategy Review" />
+      <TopBar mode={mode} setMode={setMode} />
       {mode === "board" ? (
         <BoardView
           zoom={zoom}

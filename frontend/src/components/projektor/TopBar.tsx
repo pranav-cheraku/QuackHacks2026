@@ -1,74 +1,90 @@
+import { Link } from "@tanstack/react-router";
 import { Logo } from "./Logo";
-import { Play, Check, Share2 } from "lucide-react";
+import { Play, Check, Share2, LayoutGrid } from "lucide-react";
 
 interface Props {
   mode: "board" | "editor";
   setMode: (m: "board" | "editor") => void;
-  deckTitle: string;
+  presentationName?: string;
 }
 
-const AVATARS = [
-  { i: "AK", c: "oklch(0.65 0.12 30)" },
-  { i: "JR", c: "oklch(0.55 0.1 250)" },
-  { i: "MT", c: "oklch(0.6 0.11 140)" },
+const TABS: { value: "board" | "editor"; label: string }[] = [
+  { value: "board", label: "Graph View" },
+  { value: "editor", label: "Slides View" },
 ];
 
-export function TopBar({ mode, setMode, deckTitle }: Props) {
+export function TopBar({
+  mode,
+  setMode,
+  presentationName = "Meridian — Series A",
+}: Props) {
   return (
-    <header className="h-12 flex items-center px-3 gap-4 border-b border-border bg-chrome select-none shrink-0">
-      <Logo />
-      <div className="h-5 w-px bg-border" />
-      <div className="flex items-center gap-2 text-[13px]">
-        <span className="font-semibold">{deckTitle}</span>
-        <span className="flex items-center gap-1 text-muted-foreground font-mono text-[11px]">
-          <Check size={11} strokeWidth={2.5} /> Saved
-        </span>
+    <header className="relative h-14 flex items-center px-3 gap-3 border-b border-border bg-chrome select-none shrink-0">
+      {/* Left: logo · dashboard · current presentation */}
+      <div className="flex items-center gap-2.5 min-w-0">
+        <Logo />
+        {/* TODO: /dashboard is a temporary placeholder route — wire to the real
+            "all presentations" view once it exists. */}
+        <Link
+          to="/dashboard"
+          className="flex items-center gap-1.5 px-2.5 py-1.5 text-[13px] font-semibold rounded-md text-ink hover:bg-canvas/70 transition-colors"
+        >
+          <LayoutGrid size={14} className="text-muted-foreground" />
+          Dashboard
+        </Link>
+
+        <div className="h-5 w-px bg-border mx-1" />
+
+        <div className="flex items-center gap-2 text-[13px] min-w-0">
+          <span className="font-semibold truncate">{presentationName}</span>
+          <span className="flex items-center gap-1 text-muted-foreground font-mono text-[11px] shrink-0">
+            <Check size={11} strokeWidth={2.5} /> Saved
+          </span>
+        </div>
       </div>
 
-      <nav className="flex items-center gap-4 ml-6 text-[12.5px] text-muted-foreground">
-        {["File", "Edit", "View", "Insert", "Arrange", "Help"].map((m) => (
-          <button key={m} className="hover:text-ink transition-colors">
-            {m}
-          </button>
-        ))}
+      {/* Center: view tabs */}
+      <nav className="absolute left-1/2 -translate-x-1/2 flex items-end gap-7">
+        {TABS.map((t) => {
+          const active = mode === t.value;
+          return (
+            <button
+              key={t.value}
+              onClick={() => setMode(t.value)}
+              className="flex flex-col items-center gap-1.5"
+            >
+              <span
+                className={`text-[15px] transition-colors ${
+                  active
+                    ? "font-semibold"
+                    : "font-medium text-muted-foreground hover:text-ink"
+                }`}
+                style={active ? { color: "var(--accent)" } : undefined}
+              >
+                {t.label}
+              </span>
+              <span
+                className="h-[2.5px] w-full rounded-full"
+                style={{ background: active ? "var(--accent)" : "transparent" }}
+              />
+            </button>
+          );
+        })}
       </nav>
 
-      <div className="ml-4 flex items-center rounded-md border border-border p-0.5 bg-canvas/40">
-        {(["board", "editor"] as const).map((v) => (
-          <button
-            key={v}
-            onClick={() => setMode(v)}
-            className={`px-3 py-1 text-[12px] font-semibold rounded-[4px] capitalize transition-all ${
-              mode === v
-                ? "bg-chrome shadow-sm text-ink"
-                : "text-muted-foreground hover:text-ink"
-            }`}
-          >
-            {v}
-          </button>
-        ))}
-      </div>
-
-      <div className="ml-auto flex items-center gap-3">
-        <div className="flex -space-x-1.5">
-          {AVATARS.map((a) => (
-            <div
-              key={a.i}
-              className="w-6 h-6 rounded-full ring-2 ring-chrome flex items-center justify-center text-[9px] font-bold text-white"
-              style={{ background: a.c }}
-            >
-              {a.i}
-            </div>
-          ))}
-        </div>
-        <button className="flex items-center gap-1.5 px-3 py-1.5 text-[12px] font-semibold border border-border rounded-md hover:bg-canvas/50 transition-colors">
-          <Share2 size={12} /> Share
+      {/* Right: actions */}
+      <div className="ml-auto flex items-center gap-2">
+        <button
+          className="flex items-center gap-1.5 px-3.5 py-1.5 text-[13px] font-semibold rounded-lg transition-opacity hover:opacity-90"
+          style={{ background: "var(--accent-soft)", color: "var(--accent)" }}
+        >
+          <Share2 size={14} /> Share
         </button>
         <button
-          className="flex items-center gap-1.5 px-3 py-1.5 text-[12px] font-semibold rounded-md text-white transition-opacity hover:opacity-90"
-          style={{ background: "var(--accent-teal)" }}
+          className="flex items-center gap-1.5 px-3.5 py-1.5 text-[13px] font-semibold rounded-lg text-white transition-opacity hover:opacity-90"
+          style={{ background: "var(--ink)" }}
         >
-          <Play size={11} fill="white" /> Present
+          <Play size={12} fill="white" /> Present
         </button>
       </div>
     </header>

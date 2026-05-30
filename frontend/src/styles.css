@@ -2,13 +2,14 @@
 @source "../src";
 @import "tw-animate-css";
 
-@import url("https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700;800&family=Space+Mono:wght@400;700&display=swap");
+@import url("https://fonts.googleapis.com/css2?family=Hanken+Grotesk:wght@400;500;600;700;800&family=Instrument+Serif:ital@0;1&family=JetBrains+Mono:wght@400;500;600&display=swap");
 
 @custom-variant dark (&:is(.dark *));
 
 @theme inline {
-  --font-sans: "Manrope", ui-sans-serif, system-ui, sans-serif;
-  --font-mono: "Space Mono", ui-monospace, monospace;
+  --font-sans: "Hanken Grotesk", ui-sans-serif, system-ui, sans-serif;
+  --font-serif: "Instrument Serif", ui-serif, Georgia, "Times New Roman", serif;
+  --font-mono: "JetBrains Mono", ui-monospace, monospace;
 
   --radius-sm: 4px;
   --radius-md: 6px;
@@ -24,11 +25,18 @@
   --color-muted-foreground: var(--muted-foreground);
   --color-border: var(--border);
   --color-input: var(--border);
-  --color-ring: var(--accent-teal);
-  --color-accent: var(--accent-teal);
+  --color-ring: var(--accent);
+  --color-accent: var(--accent);
   --color-accent-foreground: var(--accent-foreground);
   --color-accent-soft: var(--accent-soft);
-  --color-primary: var(--accent-teal);
+  --color-accent-press: var(--accent-press);
+  --color-accent-line: var(--accent-line);
+  --color-ok: var(--ok);
+  --color-warn: var(--warn);
+  --color-danger: var(--danger);
+  --color-ink-soft: var(--ink-soft);
+  --color-faint: var(--faint);
+  --color-primary: var(--accent);
   --color-primary-foreground: var(--accent-foreground);
   --color-secondary: var(--chrome);
   --color-secondary-foreground: var(--ink);
@@ -36,32 +44,56 @@
   --color-card-foreground: var(--ink);
   --color-popover: var(--chrome);
   --color-popover-foreground: var(--ink);
-  --color-destructive: oklch(0.55 0.2 25);
+  --color-destructive: var(--danger);
   --color-destructive-foreground: oklch(0.99 0 0);
   --color-sidebar: var(--chrome);
   --color-sidebar-foreground: var(--ink);
   --color-sidebar-border: var(--border);
   --color-sidebar-accent: var(--canvas);
   --color-sidebar-accent-foreground: var(--ink);
-  --color-sidebar-primary: var(--accent-teal);
+  --color-sidebar-primary: var(--accent);
   --color-sidebar-primary-foreground: var(--accent-foreground);
-  --color-sidebar-ring: var(--accent-teal);
+  --color-sidebar-ring: var(--accent);
 }
 
 :root {
   --radius: 6px;
-  --background: oklch(0.992 0.002 160);
-  --chrome: oklch(0.992 0.002 160);
-  --canvas: oklch(0.912 0.005 165);
-  --card: oklch(0.998 0.001 160);
-  --foreground: oklch(0.24 0.009 185);
-  --ink: oklch(0.24 0.009 185);
-  --muted: oklch(0.95 0.004 175);
-  --muted-foreground: oklch(0.53 0.011 185);
-  --border: oklch(0.9 0.006 175);
-  --accent-teal: oklch(0.54 0.105 192);
-  --accent-soft: oklch(0.93 0.04 192);
-  --accent-foreground: oklch(0.99 0 0);
+
+  /* ---- Neutrals ---- */
+  --background: #f6f7f7; /* bg */
+  --chrome: #fff; /* surface — top bar, panels */
+  --canvas: #edefef; /* bg-sunk */
+  --card: #fff; /* surface */
+  --bg-sunk: #edefef;
+  --bg-tint: #edf3f1; /* faint green tint */
+  --surface: #fff;
+  --surface-2: #fafbfb;
+  --foreground: #1a1f1e; /* ink */
+  --ink: #1a1f1e;
+  --ink-soft: #515957;
+  --muted: #edefef; /* light fill (bg-muted) */
+  --muted-foreground: #868f8d; /* muted text */
+  --faint: #b4bbb9;
+  --border: #e5e9e8; /* line */
+  --line: #e5e9e8;
+  --line-soft: #f0f2f1;
+  --dot: #dbe0df; /* dot-grid */
+
+  /* ---- Accent: emerald (the brand) ---- */
+  --accent: #16a085;
+  --accent-press: #0e7e68;
+  --accent-soft: #dbf1eb;
+  --accent-line: #a9dfd3;
+  --accent-foreground: #f2fcf9; /* on-accent */
+  --grad: #16a085;
+  --sh-v: 0 10px 26px -8px rgba(22, 160, 133, 0.28);
+  /* Deprecated alias: components still reference --accent-teal; migrate to --accent per-component. */
+  --accent-teal: var(--accent);
+
+  /* ---- Semantic ---- */
+  --ok: #16a085;
+  --warn: #e0922a;
+  --danger: #d2503b;
 }
 
 @layer base {
@@ -83,11 +115,7 @@
 }
 
 .dot-grid {
-  background-color: var(--canvas);
-  background-image: radial-gradient(
-    circle,
-    oklch(0.78 0.008 175) 1px,
-    transparent 1px
-  );
-  background-size: 18px 18px;
+  background-color: var(--background);
+  background-image: radial-gradient(circle, var(--dot) 1px, transparent 1px);
+  background-size: 22px 22px;
 }

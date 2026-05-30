@@ -27,5 +27,8 @@ npm-debug.log*
 # Claude Code related
 .claude/
 agent-docs/
+CLAUDE.md
+handoff.md
+
 
 docs/

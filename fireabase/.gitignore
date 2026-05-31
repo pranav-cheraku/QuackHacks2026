@@ -1,0 +1,25 @@
+# Dependencies
+node_modules/
+
+# Firebase
+.firebase/
+firebase-debug.log
+firebase-debug.*.log
+firestore-debug.log
+ui-debug.log
+database-debug.log
+
+# Environment
+.env
+.env.local
+.env.*.local
+
+# Build output
+lib/
+dist/
+
+# TypeScript
+*.tsbuildinfo
+
+# OS
+.DS_Store

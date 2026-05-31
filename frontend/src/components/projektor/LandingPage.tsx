@@ -5,10 +5,12 @@ import { useState, useRef } from "react";
 import { Link } from "@tanstack/react-router";
 import { Logo } from "./Logo";
 import { hydrateToSlides, type HydrateResult } from "@/lib/chunker";
-import { Paperclip, ArrowRight, Loader2, X, FileText } from "lucide-react";
+import { setIntake, type IntakeImage } from "@/lib/intakeStore";
+import { Paperclip, ArrowRight, Loader2, X, FileText, Image as ImageIcon } from "lucide-react";
 
 interface Props {
   onGenerate: (result: HydrateResult) => void;
+  onStartScratch: () => void;
 }
 
 // ── File text extraction ──────────────────────────────────────────────────────
@@ -53,14 +55,41 @@ async function extractFileText(file: File): Promise<string> {
   }
 }
 
-export function LandingPage({ onGenerate }: Props) {
+export function LandingPage({ onGenerate, onStartScratch }: Props) {
   const [text, setText] = useState("");
   const [isGenerating, setIsGenerating] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [usedMock, setUsedMock] = useState(false);
   const [mockErrorReason, setMockErrorReason] = useState<string | null>(null);
   const [attachedFiles, setAttachedFiles] = useState<File[]>([]);
+  const [images, setImages] = useState<IntakeImage[]>([]);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const imageInputRef = useRef<HTMLInputElement>(null);
+
+  const handleImageChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const files = e.target.files;
+    if (!files || files.length === 0) return;
+    const newImages: IntakeImage[] = Array.from(files).map((file, i) => ({
+      id: `img-${Date.now()}-${i}`,
+      name: file.name,
+      url: URL.createObjectURL(file),
+    }));
+    setImages((prev) => [...prev, ...newImages]);
+    e.target.value = "";
+  };
+
+  const removeImage = (id: string) => {
+    setImages((prev) => {
+      const removed = prev.find((img) => img.id === id);
+      if (removed) URL.revokeObjectURL(removed.url);
+      return prev.filter((img) => img.id !== id);
+    });
+  };
+
+  const handleStartScratch = () => {
+    setIntake({ text: text.trim(), images });
+    onStartScratch();
+  };
 
   const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const files = e.target.files;
@@ -93,6 +122,7 @@ export function LandingPage({ onGenerate }: Props) {
         setUsedMock(true);
         setMockErrorReason(result.mockReason ?? null);
       }
+      setIntake({ text: text.trim(), images });
       onGenerate(result);
     } catch (err) {
       const msg = err instanceof Error ? err.message : "Something went wrong. Try again.";
@@ -179,13 +209,35 @@ export function LandingPage({ onGenerate }: Props) {
               </div>
             )}
 
+            {/* Attached image thumbnails (content pool — no text extraction) */}
+            {images.length > 0 && (
+              <div className="px-4 pb-2 flex flex-wrap gap-2">
+                {images.map((img) => (
+                  <div key={img.id} className="relative group">
+                    <img
+                      src={img.url}
+                      alt={img.name}
+                      className="h-14 w-14 object-cover rounded-lg border border-border"
+                    />
+                    <button
+                      type="button"
+                      onClick={() => removeImage(img.id)}
+                      className="absolute -top-1.5 -right-1.5 h-4 w-4 rounded-full bg-ink text-white flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity"
+                    >
+                      <X size={9} />
+                    </button>
+                  </div>
+                ))}
+              </div>
+            )}
+
             {/* Attach files row */}
-            <div className="border-t border-border px-4 py-2.5 flex items-center">
+            <div className="border-t border-border px-4 py-2.5 flex items-center gap-1">
               <input
                 ref={fileInputRef}
                 type="file"
                 multiple
-                accept=".txt,.md,.pdf,.csv,.json,.docx"
+                accept=".txt,.md,.pdf,.csv,.json"
                 className="hidden"
                 onChange={handleFileChange}
               />
@@ -195,16 +247,40 @@ export function LandingPage({ onGenerate }: Props) {
                 className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-[12px] text-muted-foreground hover:text-ink hover:bg-canvas/60 transition-colors"
               >
                 <Paperclip size={13} />
-                Attach docs or PDFs
+                Attach docs
+              </button>
+              <input
+                ref={imageInputRef}
+                type="file"
+                multiple
+                accept="image/*"
+                className="hidden"
+                onChange={handleImageChange}
+              />
+              <button
+                type="button"
+                onClick={() => imageInputRef.current?.click()}
+                className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-[12px] text-muted-foreground hover:text-ink hover:bg-canvas/60 transition-colors"
+              >
+                <ImageIcon size={13} />
+                Add images
               </button>
               <span className="ml-2 text-[11px] text-muted-foreground/60">
-                .txt .md .pdf .docx — text extracted automatically
+                docs → text · images → content pool
               </span>
             </div>
           </div>
 
-          {/* Generate button */}
-          <div className="flex justify-end">
+          {/* Action buttons */}
+          <div className="flex justify-end items-center gap-3">
+            <button
+              type="button"
+              onClick={handleStartScratch}
+              disabled={isGenerating}
+              className="px-5 py-2.5 rounded-xl text-[13px] font-semibold text-ink border border-border bg-white transition-colors hover:bg-canvas/60 disabled:opacity-50"
+            >
+              Start from scratch
+            </button>
             <button
               type="button"
               onClick={handleGenerate}
@@ -219,7 +295,7 @@ export function LandingPage({ onGenerate }: Props) {
                 </>
               ) : (
                 <>
-                  Generate deck
+                  Generate whole slideshow
                   <ArrowRight size={14} />
                 </>
               )}

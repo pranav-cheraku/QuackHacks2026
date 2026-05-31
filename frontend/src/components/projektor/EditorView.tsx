@@ -6,7 +6,7 @@ import {
   Type, ImageIcon, Square, ChevronDown,
   Plus, Sparkles,
   Paperclip, Mic, Send, LayoutTemplate,
-  Layers, Grid3x3, Trash2, Copy,
+  Layers, Grid3x3, Trash2, Copy, Inbox,
 } from "lucide-react";
 import type { SlideNode, Edge } from "@/lib/projektor-data";
 import { SlideThumb } from "./SlideThumb";
@@ -22,6 +22,7 @@ import { INITIAL_IR_SLIDES } from "@/lib/initial-slides";
 import { SLIDE_CANDIDATES } from "@/lib/slide-candidates";
 import { ZOOM_STEP, zoomBy } from "@/lib/viewport";
 import { generateSlideCandidates } from "@/lib/slideDesignAgent";
+import { getIntake } from "@/lib/intakeStore";
 
 // ── Module-level helpers / constants ─────────────────────────────────────────
 function toHex(c?: string): string {
@@ -88,7 +89,7 @@ interface Props {
   isGridVisible: boolean;
   toggleGrid: () => void;
 }
-type RightTab = "agent" | "design" | "arrange";
+type RightTab = "agent" | "design" | "arrange" | "content";
 type HandlePos = "n" | "ne" | "e" | "se" | "s" | "sw" | "w" | "nw";
 
 function isTextEditingTarget(target: EventTarget | null): boolean {
@@ -298,6 +299,21 @@ export function EditorView({
     setEditingElId(null);
     setRailSelectionActive(false);
   }, [activeSlide, dispatchOp]);
+
+  const insertTextSnippet = useCallback((text: string) => {
+    const leaf = makeTextLeaf();
+    if (leaf.block.role === "text") leaf.block.text = text;
+    addLeaf(leaf);
+  }, [addLeaf]);
+
+  const insertImageFromUrl = useCallback((src: string) => {
+    addLeaf(
+      makeImageLeaf({
+        block: { role: "image", src },
+        placement: { col: 3000, row: 1688, colSpan: 4000, rowSpan: 2250 },
+      }),
+    );
+  }, [addLeaf]);
 
   const deleteLeaf = useCallback(
     (id: string) => {
@@ -732,6 +748,7 @@ export function EditorView({
             {(
               [
                 { id: "agent",   label: "Agent",   icon: Sparkles },
+                { id: "content", label: "Content", icon: Inbox },
                 { id: "design",  label: "Designs", icon: LayoutTemplate },
                 { id: "arrange", label: "Arrange", icon: Layers },
               ] as { id: RightTab; label: string; icon: React.FC<{ size: number }> }[]
@@ -751,6 +768,12 @@ export function EditorView({
           </div>
           <div className="flex-1 flex flex-col min-h-0 overflow-hidden">
             {rightTab === "agent"   && <AgentPanel />}
+            {rightTab === "content" && (
+              <ContentTray
+                onInsertText={insertTextSnippet}
+                onInsertImage={insertImageFromUrl}
+              />
+            )}
             {rightTab === "design"  && (
               <DesignsPanel
                 slide={activeSlide}
@@ -1530,6 +1553,76 @@ function Row({ label, children }: { label: string; children: React.ReactNode }) 
     <div className="flex items-center justify-between">
       <span className="text-muted-foreground">{label}</span>
       {children}
+    </div>
+  );
+}
+
+// ─── ContentTray ──────────────────────────────────────────────────────────────
+// Reads the session intake (text + images from the landing page) and lets the
+// user click to insert each as an editable element on the current slide.
+function ContentTray({
+  onInsertText,
+  onInsertImage,
+}: {
+  onInsertText: (text: string) => void;
+  onInsertImage: (src: string) => void;
+}) {
+  const intake = getIntake();
+  const snippets = intake.text
+    .split(/\n{2,}/)
+    .map((s) => s.trim())
+    .filter(Boolean);
+  const hasContent = snippets.length > 0 || intake.images.length > 0;
+
+  if (!hasContent) {
+    return (
+      <div className="p-4 text-[12px] text-muted-foreground">
+        Content you add on the start page shows up here.
+      </div>
+    );
+  }
+
+  return (
+    <div className="flex-1 overflow-y-auto p-3 space-y-4">
+      {snippets.length > 0 && (
+        <div>
+          <div className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground mb-2">
+            Text
+          </div>
+          <div className="space-y-2">
+            {snippets.map((s, i) => (
+              <button
+                key={i}
+                type="button"
+                onClick={() => onInsertText(s)}
+                className="w-full text-left px-3 py-2 rounded-lg border border-border bg-white hover:border-[color:var(--accent)] transition-colors text-[12px] text-ink flex items-start gap-2"
+              >
+                <span className="flex-1 line-clamp-3">{s}</span>
+                <Plus size={12} className="shrink-0 mt-0.5 text-muted-foreground" />
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
+      {intake.images.length > 0 && (
+        <div>
+          <div className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground mb-2">
+            Images
+          </div>
+          <div className="grid grid-cols-3 gap-2">
+            {intake.images.map((img) => (
+              <button
+                key={img.id}
+                type="button"
+                onClick={() => onInsertImage(img.url)}
+                className="aspect-square rounded-lg overflow-hidden border border-border hover:border-[color:var(--accent)] transition-colors"
+              >
+                <img src={img.url} alt={img.name} className="h-full w-full object-cover" />
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
     </div>
   );
 }

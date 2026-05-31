@@ -134,8 +134,31 @@ function Projektor() {
     setPhase("app");
   };
 
+  // START-FROM-SCRATCH ENTRY: a blank single-slide deck opened straight in the
+  // editor. Intake (text + images) was already saved by LandingPage; the editor's
+  // Content tab reads it. EditorView fills the slide's `root` via emptyRoot.
+  const handleStartFromScratch = () => {
+    const blank: SlideNode = {
+      id: `scratch-${Date.now()}`,
+      index: 1,
+      title: "Untitled",
+      x: 0,
+      y: 0,
+      state: "rendered",
+      thumb: "title",
+      kind: "title",
+      status: "draft",
+    };
+    setDeck([blank]);
+    setDeckEdges([]);
+    setDeckLoaded(true); // signal EditorView to init from this deck
+    setEditorStart(null);
+    setMode("editor");
+    setPhase("app");
+  };
+
   if (phase === "landing") {
-    return <LandingPage onGenerate={handleGenerate} />;
+    return <LandingPage onGenerate={handleGenerate} onStartScratch={handleStartFromScratch} />;
   }
 
   return (

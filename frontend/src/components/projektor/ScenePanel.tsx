@@ -20,13 +20,12 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import type {
-  ComponentType,
-  ContentBlock,
   EdgeRelation,
   SceneRole,
   SceneStatus,
   SlideNode,
 } from "@/lib/projektor-data";
+import type { ContentNode } from "@/lib/ir";
 import { editNode } from "@/lib/editApi";
 import { getIntake } from "@/lib/intakeStore";
 import { getThread, setThread, type ChatMessage } from "@/lib/chatStore";
@@ -44,9 +43,9 @@ interface Props {
   onChangeRole: (id: string, r: SceneRole) => void;
   onChangeRelation: (toId: string, r: EdgeRelation) => void;
   onToggleLock: (id: string) => void;
-  onAddBlock: (id: string, block: Omit<ContentBlock, "id">) => void;
-  onUpdateBlock: (id: string, blockId: string, patch: { text?: string; label?: string }) => void;
-  onRemoveBlock: (id: string, blockId: string) => void;
+  // Agent-built content components land here: one ContentNode per accepted op,
+  // already attached to the box via sourceRef. Added to the global contentPool.
+  onCreateContent: (nodes: ContentNode[]) => void;
   onOpenContent: (id: string) => void;
   onAccept: (id: string) => void;
   onDiscard: (id: string) => void;
@@ -85,9 +84,7 @@ export function ScenePanel({
   onChangeRole,
   onChangeRelation,
   onToggleLock,
-  onAddBlock,
-  onUpdateBlock,
-  onRemoveBlock,
+  onCreateContent,
   onOpenContent,
   onAccept,
   onDiscard,
@@ -172,9 +169,7 @@ export function ScenePanel({
           <ChatTab
             key={node.id}
             node={node}
-            onAddBlock={onAddBlock}
-            onUpdateBlock={onUpdateBlock}
-            onRemoveBlock={onRemoveBlock}
+            onCreateContent={onCreateContent}
           />
         ) : (
           <div className="flex-1 flex items-center justify-center px-6 text-center text-[13px] text-muted-foreground">
@@ -383,35 +378,69 @@ const QUICK_PROMPTS = [
   "Add a relevant image",
 ];
 
-const OP_VERB: Record<EditOp["op"], string> = {
-  addBlock: "Add",
-  updateBlock: "Edit",
-  removeBlock: "Remove",
-};
+const CN_W = 220;
+const CN_GAP = 16;
 
-// One-line human description of a proposed op, for the proposal card.
-function opLine(op: EditOp): string {
-  if (op.op === "addBlock") {
-    const what = op.blockType ?? "block";
-    const detail = op.text ? `: ${op.text}` : op.imageRef ? " (uploaded image)" : "";
-    return `${what}${op.label ? ` — ${op.label}` : ""}${detail}`;
-  }
-  if (op.op === "updateBlock") return `${op.blockId ?? ""}${op.text ? `: ${op.text}` : ""}`;
-  return `${op.blockId ?? ""}`;
+// Badge label for a proposed content component, for the proposal card.
+function opKindLabel(op: EditOp): string {
+  if (op.kind === "text") return op.role ? op.role.toUpperCase() : "TEXT";
+  if (op.kind === "image") return "IMAGE";
+  return "CHART";
 }
 
-// Build a board ContentBlock (minus id) from one agent op. Resolves an Image op's
-// imageRef against the uploaded intake pool; returns null if it can't be resolved.
-function blockFromOp(op: EditOp): Omit<ContentBlock, "id"> | null {
-  const type = op.blockType as ComponentType | undefined;
-  if (!type) return null;
-  const label = op.label ?? type;
-  if (type === "Image") {
+// One-line human description of a proposed content component, for the proposal card.
+function opLine(op: EditOp): string {
+  if (op.kind === "text") return op.text ?? "";
+  if (op.kind === "image")
+    return op.caption ? `${op.caption} (uploaded image)` : "(uploaded image)";
+  const pts = (op.chartData ?? []).length;
+  return `${op.chartTitle ?? "Chart"} — ${op.chartType ?? "bar"}, ${pts} point${pts === 1 ? "" : "s"}`;
+}
+
+// Build a ContentNode (ir) from one agent op, attached to `box` via sourceRef and
+// positioned just below it on the canvas. Returns null if it can't be built — e.g.
+// an image op whose imageRef doesn't match an upload, or a text op with no text.
+function contentNodeFromOp(op: EditOp, box: SlideNode, seq: number): ContentNode | null {
+  const id = `cp-agent-${box.id}-${Date.now()}-${seq}`;
+  const graphPosition = {
+    x: box.x + seq * (CN_W + CN_GAP),
+    y: box.y + (box.height ?? 200) + 80,
+  };
+  if (op.kind === "text") {
+    if (!op.text) return null;
+    return {
+      id,
+      kind: "text",
+      payload: { role: op.role ?? "claim", text: op.text },
+      sourceRef: box.id,
+      graphPosition,
+    };
+  }
+  if (op.kind === "image") {
     const img = getIntake().images.find((i) => i.id === op.imageRef);
     if (!img) return null;
-    return { type, label, src: img.url };
+    return {
+      id,
+      kind: "image",
+      payload: { url: img.url, caption: op.caption },
+      sourceRef: box.id,
+      graphPosition,
+    };
   }
-  return { type, label, text: op.text ?? "" };
+  if (op.kind === "data") {
+    const data: Record<string, number> = {};
+    (op.chartData ?? []).forEach((d) => {
+      data[d.label] = d.value;
+    });
+    return {
+      id,
+      kind: "data",
+      payload: { chart: { type: op.chartType ?? "bar", data, title: op.chartTitle } },
+      sourceRef: box.id,
+      graphPosition,
+    };
+  }
+  return null;
 }
 
 // Reject if a promise doesn't settle within `ms`. This guarantees the chat's
@@ -443,14 +472,10 @@ function friendlyEditError(reason: string): string {
 
 function ChatTab({
   node,
-  onAddBlock,
-  onUpdateBlock,
-  onRemoveBlock,
+  onCreateContent,
 }: {
   node: SlideNode;
-  onAddBlock: (id: string, block: Omit<ContentBlock, "id">) => void;
-  onUpdateBlock: (id: string, blockId: string, patch: { text?: string; label?: string }) => void;
-  onRemoveBlock: (id: string, blockId: string) => void;
+  onCreateContent: (nodes: ContentNode[]) => void;
 }) {
   // Per-node thread: seed from the session store, persist on every change.
   const [messages, setMessages] = useState<ChatMessage[]>(() => getThread(node.id));
@@ -490,12 +515,6 @@ function ChatTab({
               body: node.body,
               eyebrow: node.eyebrow,
               kind: node.kind,
-              blocks: (node.blocks ?? []).map((b) => ({
-                id: b.id,
-                type: b.type,
-                label: b.label,
-                text: b.text,
-              })),
             },
             availableImages: getIntake().images.map((i) => ({ id: i.id, name: i.name })),
           },
@@ -518,24 +537,18 @@ function ChatTab({
     }
   };
 
-  // Accept → apply every op to this node's blocks; Discard → just mark it.
-  // Side effects (onAddBlock/…) run HERE in the event handler — never inside the
-  // setMessages updater, which must stay pure (StrictMode double-invokes updaters,
-  // which would otherwise apply every op twice).
+  // Accept → build a ContentNode per op and attach them all to this box; Discard →
+  // just mark it. Side effects (onCreateContent) run HERE in the event handler —
+  // never inside the setMessages updater, which must stay pure (StrictMode
+  // double-invokes updaters, which would otherwise create the nodes twice).
   const decide = (msgId: string, accept: boolean) => {
     const msg = messages.find((m) => m.id === msgId);
     if (!msg || !msg.proposal || msg.proposalStatus !== "pending") return;
     if (accept) {
-      for (const op of msg.proposal.ops) {
-        if (op.op === "addBlock") {
-          const block = blockFromOp(op);
-          if (block) onAddBlock(node.id, block);
-        } else if (op.op === "updateBlock" && op.blockId) {
-          onUpdateBlock(node.id, op.blockId, { text: op.text, label: op.label });
-        } else if (op.op === "removeBlock" && op.blockId) {
-          onRemoveBlock(node.id, op.blockId);
-        }
-      }
+      const built = msg.proposal.ops
+        .map((op, i) => contentNodeFromOp(op, node, i))
+        .filter((n): n is ContentNode => n !== null);
+      if (built.length) onCreateContent(built);
     }
     setMessages((prev) =>
       prev.map((m) =>
@@ -621,7 +634,7 @@ function ChatTab({
                             className="flex items-start gap-1.5 text-[11px] text-ink"
                           >
                             <span className="font-mono text-[9px] uppercase tracking-wider text-accent shrink-0 pt-0.5">
-                              {OP_VERB[op.op]}
+                              {opKindLabel(op)}
                             </span>
                             <span className="flex-1 break-words">{opLine(op)}</span>
                           </div>

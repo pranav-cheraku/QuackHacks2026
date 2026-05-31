@@ -424,30 +424,6 @@ export function BoardView({
           : n,
       ),
     );
-  // Edit an existing block's text/label (used by the Chat agent's updateBlock op).
-  const updateBlock = (
-    id: string,
-    blockId: string,
-    patch: { text?: string; label?: string },
-  ) =>
-    setNodes((ns) =>
-      ns.map((n) =>
-        n.id === id
-          ? {
-              ...n,
-              blocks: (n.blocks ?? []).map((b) =>
-                b.id === blockId
-                  ? {
-                      ...b,
-                      ...(patch.text !== undefined ? { text: patch.text } : {}),
-                      ...(patch.label !== undefined ? { label: patch.label } : {}),
-                    }
-                  : b,
-              ),
-            }
-          : n,
-      ),
-    );
   // Relation lives on the edge into this node; editing it updates the canvas label.
   const setRelation = (toId: string, relation: EdgeRelation) =>
     setEdges((es) => es.map((e) => (e.to === toId ? { ...e, relation } : e)));
@@ -1371,9 +1347,9 @@ export function BoardView({
             onChangeRole={setRole}
             onChangeRelation={setRelation}
             onToggleLock={toggleLock}
-            onAddBlock={addBlock}
-            onUpdateBlock={updateBlock}
-            onRemoveBlock={removeBlock}
+            onCreateContent={(nodes) =>
+              onContentPoolChange?.([...(contentPool ?? []), ...nodes])
+            }
             onOpenContent={setContentSceneId}
             onAccept={acceptGhost}
             onDiscard={discardGhost}

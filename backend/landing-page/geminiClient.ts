@@ -166,77 +166,89 @@ export function getExpansionModel() {
 }
 
 // ── Edit response schema ────────────────────────────────────────────────────────
-// Used by editAgent.ts. A FLAT op shape (op + optional fields) — Gemini's
-// responseSchema can't express discriminated unions, so the frontend narrows each
-// op by its `op` field. See editSchema.ts for the matching Zod validator.
+// Used by editAgent.ts. The agent BUILDS content components for one box; each op is
+// a ContentNode to create (text / image / data-chart). A FLAT op shape (kind +
+// optional fields) — Gemini's responseSchema can't express discriminated unions, so
+// the client narrows each op by its `kind`. See editSchema.ts for the Zod validator
+// and ScenePanel.contentNodeFromOp for the op → ContentNode mapping.
 export const EDIT_RESPONSE_SCHEMA: Schema = {
   type: SchemaType.OBJECT,
   properties: {
     summary: {
       type: SchemaType.STRING,
-      description: "One sentence describing the proposed changes",
+      description: "One sentence on the content components you built and why they fit this box",
     },
     ops: {
       type: SchemaType.ARRAY,
       items: {
         type: SchemaType.OBJECT,
         properties: {
-          op: {
+          kind: {
             type: SchemaType.STRING,
             format: "enum",
-            enum: ["addBlock", "updateBlock", "removeBlock"],
-            description: "The edit operation",
+            enum: ["text", "image", "data"],
+            description: "Which content component to build: text, image, or data (a chart)",
           },
-          blockType: {
+          role: {
             type: SchemaType.STRING,
             format: "enum",
-            enum: ["Header", "Subheader", "Body", "List", "Stat", "Quote", "Image"],
-            description: "For addBlock: the kind of block to add",
-          },
-          label: {
-            type: SchemaType.STRING,
-            description: "For addBlock/updateBlock: a short label for the block",
+            enum: ["claim", "evidence", "aside"],
+            description: "For kind=text: claim = the point; evidence = a supporting fact/stat; aside = a caveat",
           },
           text: {
             type: SchemaType.STRING,
-            description: "For text blocks: the content. For List use '• ' bullets",
+            description: "For kind=text: one idea. For a stat, the number plus exactly what it measures",
           },
           imageRef: {
             type: SchemaType.STRING,
-            description: "For an Image block: the id of one AVAILABLE uploaded image",
+            description: "For kind=image: the id of ONE available uploaded image. Never invent an id or URL",
           },
-          blockId: {
+          caption: {
             type: SchemaType.STRING,
-            description: "For updateBlock/removeBlock: the id of the existing block",
+            description: "For kind=image: a short caption",
+          },
+          chartType: {
+            type: SchemaType.STRING,
+            format: "enum",
+            enum: ["bar", "line", "pie", "scatter", "area"],
+            description: "For kind=data: the chart type that best fits the data",
+          },
+          chartTitle: {
+            type: SchemaType.STRING,
+            description: "For kind=data: a short chart title",
+          },
+          chartData: {
+            type: SchemaType.ARRAY,
+            description: "For kind=data: 2-8 data points",
+            items: {
+              type: SchemaType.OBJECT,
+              properties: {
+                label: { type: SchemaType.STRING, description: "Category / x-axis label" },
+                value: { type: SchemaType.NUMBER, description: "Numeric value" },
+              },
+              required: ["label", "value"],
+            },
           },
         },
-        required: ["op"],
+        required: ["kind"],
       },
     },
   },
   required: ["summary", "ops"],
 };
 
-const EDIT_SYSTEM_INSTRUCTION = `You are a presentation content strategist editing ONE content box (a node in an argument graph). You propose concrete, high-quality changes to its content blocks.
+const EDIT_SYSTEM_INSTRUCTION = `You are a presentation content strategist BUILDING content components for ONE content box (a node in an argument graph). Each component you propose becomes a ContentNode attached to the box.
 
-THINK FIRST about what THIS slide needs (do not skip this):
-- What is the slide's single point (read its title, kind, and role), and what is missing to make that point land for an audience?
-- Read the EXISTING blocks carefully. NEVER propose content that duplicates or closely echoes a block already on the slide. If asked for "another stat" and a stat already exists, the new one MUST measure a different dimension.
+THINK FIRST (do not skip):
+- What is the box's single point (read its title, kind, eyebrow, body)? Which components make that point land for an audience?
+- Build the MINIMUM set of distinct, high-quality components the request needs — never duplicate an idea, and if asked for "another stat" measure a DIFFERENT dimension.
 
-CONTENT QUALITY — this is what matters most:
-- Be specific and concrete. Use precise, vivid, plausible figures and facts, not round generic numbers. Never write filler like "increased significantly" or a vague "40% improvement" with no subject.
-- For Stat blocks, deliberately VARY the dimension you measure across the slide — rotate among: adoption/usage, time saved, cost/$ saved, revenue/growth, error or defect rate, retention/churn, market size, speed/latency, team or customer satisfaction. Do NOT keep proposing the same kind of metric. Give every number a specific label and, in the text, one line of context that makes it credible (who, over what period, vs. what baseline).
-- Pick the block TYPE that best fits the point — a Quote for credibility, a List to break out steps or examples, a Stat for one hard number, a Body for nuance. Do NOT default to Stat every time.
-- Reason about what genuinely strengthens the argument, then make the MINIMUM edits that fulfill the request — but make them distinct and useful, not boilerplate.
+COMPONENT KINDS — pick the one that best fits each point; do NOT default to text every time:
+- "text": one idea per component. role = claim (the point), evidence (a supporting fact/stat), or aside (a caveat). Be concrete: precise, vivid, plausible figures — never filler like "increased significantly". For an evidence stat, give the number and one line of context (who, over what period, vs. what baseline). VARY the dimension across components: adoption, time saved, cost saved, revenue/growth, error rate, retention, speed/latency, satisfaction.
+- "data": a chart (chartType + chartTitle + 2-8 chartData points {label, value}). Use when a comparison or trend tells the story better than a sentence.
+- "image": ONLY if a relevant uploaded image exists — set imageRef to its id (never invent an id/URL) and add a short caption.
 
-OPS:
-- "addBlock": set blockType + label + (text for text blocks, or imageRef for an Image).
-  • Text block types: Header, Subheader, Body, List (use "• " bullets), Stat (a number + short label), Quote.
-  • Image: set imageRef to the id of one of the AVAILABLE uploaded images — never invent an id or URL. Only add an Image if a relevant uploaded image exists.
-- "updateBlock": set blockId (an existing block's id) plus the new text and/or label.
-- "removeBlock": set blockId.
-
-Return a "summary" (one sentence on what you changed AND why it fits this slide) and the "ops" array.
+Return a "summary" (one sentence on what you built AND why it fits THIS box) and the "ops" array (each op = one component).
 Return ONLY the JSON object. No prose, no markdown fences.`;
 
 // ── EDIT MODEL SWAP POINT ─────────────────────────────────────────────────────

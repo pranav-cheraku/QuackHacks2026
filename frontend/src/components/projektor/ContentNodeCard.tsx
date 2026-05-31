@@ -1,5 +1,5 @@
 import { useEffect, useRef } from "react";
-import type { ContentNode, TextPayload, ImagePayload } from "@/lib/ir";
+import type { ContentNode, TextPayload, ImagePayload, DataPayload } from "@/lib/ir";
 
 interface Props {
   node: ContentNode;
@@ -71,6 +71,7 @@ export function ContentNodeCard({
 
   const textPayload = node.kind === "text" ? (node.payload as TextPayload) : null;
   const imagePayload = node.kind === "image" ? (node.payload as ImagePayload) : null;
+  const dataPayload = node.kind === "data" ? (node.payload as DataPayload) : null;
 
   return (
     <div
@@ -123,6 +124,48 @@ export function ContentNodeCard({
                 {imagePayload.caption}
               </span>
             )}
+          </div>
+        )}
+
+        {/* Data / chart content — simple horizontal-bar preview for any chart type */}
+        {dataPayload && (
+          <div className="px-3 pb-3">
+            {dataPayload.chart.title && (
+              <p className="mb-1.5 text-[11px] font-medium text-ink truncate">
+                {dataPayload.chart.title}
+              </p>
+            )}
+            <div className="space-y-1">
+              {(() => {
+                const rows = Object.entries(dataPayload.chart.data).slice(0, 6);
+                const max = Math.max(
+                  1,
+                  ...rows.map(([, v]) => Number(v) || 0),
+                );
+                return rows.map(([label, value]) => {
+                  const pct = Math.max(2, Math.round(((Number(value) || 0) / max) * 100));
+                  return (
+                    <div key={label} className="flex items-center gap-1.5">
+                      <span className="w-14 shrink-0 text-[9px] text-muted-foreground truncate">
+                        {label}
+                      </span>
+                      <div className="flex-1 h-2 rounded-full bg-canvas overflow-hidden">
+                        <div
+                          className="h-full rounded-full"
+                          style={{ width: `${pct}%`, background: "var(--accent)" }}
+                        />
+                      </div>
+                      <span className="w-8 shrink-0 text-right font-mono text-[9px] text-muted-foreground">
+                        {String(value)}
+                      </span>
+                    </div>
+                  );
+                });
+              })()}
+            </div>
+            <span className="block mt-1 font-mono text-[9px] uppercase tracking-wider text-faint">
+              {dataPayload.chart.type} chart
+            </span>
           </div>
         )}
       </div>

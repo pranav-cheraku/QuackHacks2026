@@ -1,20 +1,17 @@
 // ── Gemini edit agent ──────────────────────────────────────────────────────────
-// callEditAgent takes ONE node's content + the user's instruction and asks Gemini
-// for a proposal: a list of content-block ops (add/update/remove). The frontend
-// renders the proposal for Accept/Discard and applies the ops to the node.
+// callEditAgent takes ONE box's context + the user's instruction and asks Gemini to
+// BUILD content components: a list of ops, each a ContentNode to create (text /
+// image / data-chart). The frontend renders the proposal for Accept/Discard and, on
+// Accept, instantiates the ContentNodes in the pool attached to the box.
 //
 // EDIT AGENT swap point: the model lives in geminiClient.getEditModel().
 // Error labels match chunkingAgent.ts / expandAgent.ts:
 //   [GEMINI_API_ERROR] / [GEMINI_PARSE_ERROR] / [GEMINI_SCHEMA_ERROR]
-// On total failure the backend throws — the ChatTab catches and falls back to a
-// deterministic mock proposal (same split-of-responsibility as the chunker).
+// On total failure the backend throws — the ChatTab catches and surfaces the error.
 import { getEditModel } from "./geminiClient";
 import { EditResponseSchema, type EditRequest, type EditResponse } from "./editSchema";
 
 function buildPrompt(req: EditRequest): string {
-  const blocks = req.node.blocks.length
-    ? req.node.blocks.map((b) => `  - [${b.id}] ${b.type}: "${b.text ?? b.label}"`).join("\n")
-    : "  (none yet)";
   const images = req.availableImages.length
     ? req.availableImages.map((i) => `  - ${i.id}: "${i.name}"`).join("\n")
     : "  (none uploaded)";
@@ -22,15 +19,12 @@ function buildPrompt(req: EditRequest): string {
   Title: "${req.node.title}"
   Kind: ${req.node.kind}${req.node.eyebrow ? `\n  Eyebrow: "${req.node.eyebrow}"` : ""}${req.node.body ? `\n  Body: "${req.node.body}"` : ""}
 
-Existing content blocks:
-${blocks}
-
 Available uploaded images (reference by id only):
 ${images}
 
 User request: "${req.instruction}"
 
-Propose concrete content-block edits to fulfill the request.`;
+Build the content components (text / data chart / image) that fulfill the request for this box.`;
 }
 
 async function attemptEdit(req: EditRequest): Promise<EditResponse> {

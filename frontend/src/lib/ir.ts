@@ -573,12 +573,17 @@ function contentNodeToLeaf(cn: ContentNode, placement: GridPlacement): LeafNode 
     lineHeight: 1.3,
     ...TEXT_STYLE_MAP[payload.role],
   };
+  // Bullet role: ensure every non-empty line starts with "• " so the slide canvas
+  // renders actual bullet points (the canvas uses pre-wrap, not a list element).
+  const text = payload.role === 'bullet'
+    ? payload.text.split('\n').map((l) => l.trim() && !l.startsWith('•') ? `• ${l}` : l).join('\n')
+    : payload.text;
   return {
     kind: 'leaf',
     id: makeLeafId(),
     contentNodeId: cn.id,
     placement,
-    block: { role: 'text', text: payload.text, style },
+    block: { role: 'text', text, style },
     zIndex: 1,
     opacity: 1,
     rotation: 0,

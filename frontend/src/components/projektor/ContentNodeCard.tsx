@@ -14,9 +14,15 @@ interface Props {
 }
 
 const ROLE_LABEL: Record<TextPayload["role"], string> = {
-  claim:    "CLAIM",
-  evidence: "EVIDENCE",
-  aside:    "ASIDE",
+  claim:    "H1",
+  evidence: "BODY",
+  aside:    "QUOTE",
+};
+
+const ROLE_TEXT_CLASS: Record<TextPayload["role"], string> = {
+  claim:    "text-[15px] font-bold leading-tight text-ink",
+  evidence: "text-[12px] font-normal leading-snug text-ink",
+  aside:    "text-[11px] italic leading-snug text-muted-foreground",
 };
 
 export function ContentNodeCard({
@@ -113,9 +119,9 @@ export function ContentNodeCard({
           </span>
         </div>
 
-        {/* Text content */}
+        {/* Text content — styled per role so the card previews the actual slide style */}
         {textPayload && (
-          <p className="px-3 pb-3 text-[12.5px] leading-snug text-ink">
+          <p className={`px-3 pb-3 ${ROLE_TEXT_CLASS[textPayload.role]}`}>
             {textPayload.text}
           </p>
         )}

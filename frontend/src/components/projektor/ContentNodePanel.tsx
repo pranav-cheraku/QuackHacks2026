@@ -1,12 +1,5 @@
 import { useEffect, useState } from "react";
 import { Trash2, X } from "lucide-react";
-import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuTrigger,
-} from "@/components/ui/dropdown-menu";
-import { ChevronDown } from "lucide-react";
 import type { ContentNode, TextPayload, ImagePayload } from "@/lib/ir";
 
 interface Props {
@@ -16,10 +9,10 @@ interface Props {
   onDelete: () => void;
 }
 
-const ROLES: { value: TextPayload["role"]; label: string }[] = [
-  { value: "claim",    label: "Claim" },
-  { value: "evidence", label: "Evidence" },
-  { value: "aside",    label: "Aside" },
+const ROLES: { value: TextPayload["role"]; label: string; hint: string }[] = [
+  { value: "claim",    label: "H1",    hint: "Large headline — primary claim" },
+  { value: "evidence", label: "Body",  hint: "Supporting body text" },
+  { value: "aside",    label: "Quote", hint: "Italic aside or pull-quote" },
 ];
 
 export function ContentNodePanel({ node, onClose, onChange, onDelete }: Props) {
@@ -66,8 +59,6 @@ export function ContentNodePanel({ node, onClose, onChange, onDelete }: Props) {
     onChange({ ...node, kind: "image", payload: nextCaption.trim() ? { url, caption: nextCaption.trim() } : { url } });
   };
 
-  const currentRoleLabel = ROLES.find((r) => r.value === role)?.label ?? "Claim";
-
   return (
     <div
       className="absolute right-4 top-4 bottom-4 z-20 w-[320px] flex flex-col rounded-2xl border border-border bg-chrome shadow-[var(--sh-v)] overflow-hidden"
@@ -98,32 +89,40 @@ export function ContentNodePanel({ node, onClose, onChange, onDelete }: Props) {
       {/* Body */}
       <div className="flex-1 overflow-y-auto px-4 py-3.5 space-y-3.5">
 
-        {/* Role (text nodes only) */}
+        {/* Role picker (text nodes only) */}
         {node.kind === "text" && (
-          <Field label="Type">
-            <DropdownMenu>
-              <DropdownMenuTrigger asChild>
+          <div className="space-y-2">
+            <span className="text-[12px] text-muted-foreground">Style</span>
+            <div className="flex rounded-lg border border-border overflow-hidden">
+              {ROLES.map((r) => (
                 <button
+                  key={r.value}
                   type="button"
-                  className="flex items-center gap-1.5 px-2 py-1 rounded-md text-[13px] font-medium text-ink hover:bg-canvas/70 transition-colors"
+                  title={r.hint}
+                  onClick={() => commitRole(r.value)}
+                  className={`flex-1 py-1.5 text-[12px] font-semibold transition-colors ${
+                    role === r.value
+                      ? "bg-ink text-white"
+                      : "bg-card text-muted-foreground hover:text-ink hover:bg-canvas/60"
+                  }`}
                 >
-                  {currentRoleLabel}
-                  <ChevronDown size={13} className="text-muted-foreground" />
+                  {r.label}
                 </button>
-              </DropdownMenuTrigger>
-              <DropdownMenuContent align="end" className="min-w-[160px] bg-chrome border-border">
-                {ROLES.map((r) => (
-                  <DropdownMenuItem
-                    key={r.value}
-                    onSelect={() => commitRole(r.value)}
-                    className="gap-1.5 text-[13px] cursor-pointer focus:bg-canvas focus:text-ink"
-                  >
-                    {r.label}
-                  </DropdownMenuItem>
-                ))}
-              </DropdownMenuContent>
-            </DropdownMenu>
-          </Field>
+              ))}
+            </div>
+            {/* Live style preview */}
+            <div className="rounded-lg border border-border bg-canvas px-3 py-2.5 min-h-[40px]">
+              {role === "claim" && (
+                <span className="text-[18px] font-bold leading-tight text-ink">{text || "Headline text"}</span>
+              )}
+              {role === "evidence" && (
+                <span className="text-[13px] leading-snug text-ink">{text || "Body text"}</span>
+              )}
+              {role === "aside" && (
+                <span className="text-[12px] italic leading-snug text-muted-foreground">{text || "Quote or aside"}</span>
+              )}
+            </div>
+          </div>
         )}
 
         <div className="h-px bg-line-soft" />

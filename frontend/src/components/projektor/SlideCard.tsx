@@ -200,43 +200,6 @@ function Preview({ node, connectedContent }: { node: SlideNode; connectedContent
     );
   }
 
-  // No content connected — blank preview for title slides
-  if (node.kind === "title") {
-    return null;
-  }
-
-  if (node.kind === "problem") {
-    return (
-      <div className="space-y-2 py-1">
-        {["w-full", "w-full", "w-4/5", "w-2/3"].map((wd, i) => (
-          <div key={i} className={`h-2 rounded-full bg-canvas ${wd}`} />
-        ))}
-      </div>
-    );
-  }
-
-  const bars = [38, 54, 72, 96];
-  return (
-    <div>
-      <div className="flex items-end gap-3 h-20">
-        {bars.map((h, i) => (
-          <div
-            key={i}
-            className="flex-1 rounded-md"
-            style={{
-              height: `${h}%`,
-              background: i === bars.length - 1 ? "var(--accent)" : "var(--accent-soft)",
-            }}
-          />
-        ))}
-      </div>
-      <div className="flex gap-3 mt-1.5">
-        {["Q1", "Q2", "Q3", "Q4"].map((q) => (
-          <div key={q} className="flex-1 text-center font-mono text-[9px] text-muted-foreground">
-            {q}
-          </div>
-        ))}
-      </div>
-    </div>
-  );
+  // No content connected — blank preview for all slide kinds
+  return null;
 }

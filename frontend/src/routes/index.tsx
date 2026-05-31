@@ -32,7 +32,7 @@ export const Route = createFileRoute("/")({
 
 function Projektor() {
   const { projectId } = Route.useSearch();
-  const { currentUser } = useAuth();
+  const { currentUser, loading } = useAuth();
   const navigate = useNavigate();
 
   const [phase, setPhase] = useState<"landing" | "app">(
@@ -111,6 +111,9 @@ function Projektor() {
     return () => window.removeEventListener("keydown", handleKeyDown);
   }, []);
 
+  // Prevent BoardView from mounting until auth is confirmed — avoids ref-loop
+  // timing issues when Radix components initialize during the auth transition.
+  if (loading || !currentUser) return null;
 
   const setZoom = (nextZoom: number) => setZoomState(clampZoom(nextZoom));
   const toggleGrid = () => setIsGridVisible((v) => !v);

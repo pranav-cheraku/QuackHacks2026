@@ -439,24 +439,70 @@ interface ChatMessage {
   content: string;
 }
 
+const QUICK_PROMPTS = [
+  "Assess the slide deck flow",
+  "Improve this slide",
+  "Suggest supporting evidence",
+];
+
+interface AttachedImage {
+  file: File;
+  width: number;
+  height: number;
+  objectUrl: string;
+}
+
 function ChatTab({ title }: { title: string }) {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [draft, setDraft] = useState("");
+  const [attachment, setAttachment] = useState<AttachedImage | null>(null);
   const listRef = useRef<HTMLDivElement>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
     if (listRef.current)
       listRef.current.scrollTop = listRef.current.scrollHeight;
   }, [messages]);
 
-  const submit = () => {
-    const text = draft.trim();
-    if (!text) return;
+  // Revoke object URL when attachment changes to avoid memory leaks
+  useEffect(() => {
+    return () => {
+      if (attachment) URL.revokeObjectURL(attachment.objectUrl);
+    };
+  }, [attachment]);
+
+  const submitText = (text: string) => {
+    const trimmed = text.trim();
+    if (!trimmed && !attachment) return;
+    const content = [
+      attachment ? `[Image: ${attachment.file.name} ${attachment.width}×${attachment.height}]` : "",
+      trimmed,
+    ]
+      .filter(Boolean)
+      .join("\n");
     setMessages((prev) => [
       ...prev,
-      { id: `msg-${Date.now()}`, role: "user", content: text },
+      { id: `msg-${Date.now()}`, role: "user", content },
     ]);
     setDraft("");
+    if (attachment) {
+      URL.revokeObjectURL(attachment.objectUrl);
+      setAttachment(null);
+    }
+  };
+
+  const submit = () => submitText(draft);
+
+  const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    const url = URL.createObjectURL(file);
+    const img = new Image();
+    img.onload = () => {
+      setAttachment({ file, width: img.naturalWidth, height: img.naturalHeight, objectUrl: url });
+    };
+    img.src = url;
+    e.target.value = "";
   };
 
   return (
@@ -464,7 +510,7 @@ function ChatTab({ title }: { title: string }) {
       {/* Message list */}
       <div ref={listRef} className="flex-1 overflow-y-auto p-3 space-y-3">
         {messages.length === 0 ? (
-          <div className="flex flex-col items-center justify-center h-full gap-3 text-center py-10">
+          <div className="flex flex-col items-center justify-center h-full gap-4 text-center py-10">
             <div className="w-10 h-10 rounded-full bg-accent-soft flex items-center justify-center text-accent">
               <Sparkles size={18} />
             </div>
@@ -472,6 +518,19 @@ function ChatTab({ title }: { title: string }) {
               Talk to the AI about &ldquo;{title}&rdquo; and the slides
               connected to it.
             </p>
+            <div className="flex flex-col gap-2 w-full px-2">
+              {QUICK_PROMPTS.map((prompt) => (
+                <button
+                  key={prompt}
+                  type="button"
+                  onClick={() => submitText(prompt)}
+                  className="flex items-center gap-2 px-3 py-2 rounded-lg border border-border bg-card text-[12px] text-muted-foreground hover:text-ink hover:bg-canvas/60 transition-colors text-left"
+                >
+                  <span className="text-muted-foreground">↪</span>
+                  {prompt}
+                </button>
+              ))}
+            </div>
           </div>
         ) : (
           messages.map((msg) =>
@@ -496,10 +555,72 @@ function ChatTab({ title }: { title: string }) {
       </div>
 
       {/* Input */}
-      <div className="border-t border-border p-2.5 shrink-0">
-        <div className="border border-border rounded-lg px-3 py-2 bg-card flex items-center gap-2">
+      <div className="border-t border-border p-2.5 shrink-0 space-y-2">
+        {/* Image attachment preview */}
+        {attachment && (
+          <div className="flex items-center gap-1.5 px-1">
+            <div className="flex items-center gap-1.5 px-2 py-1 rounded-md bg-canvas border border-border text-[11px] text-muted-foreground max-w-full overflow-hidden">
+              <ImageIcon size={11} className="shrink-0 text-accent" />
+              <span className="truncate font-medium text-ink">{attachment.file.name}</span>
+              <span className="shrink-0 text-faint">
+                {attachment.width}×{attachment.height}
+              </span>
+              <button
+                type="button"
+                onClick={() => {
+                  URL.revokeObjectURL(attachment.objectUrl);
+                  setAttachment(null);
+                }}
+                className="ml-0.5 shrink-0 text-muted-foreground hover:text-ink transition-colors"
+              >
+                <X size={11} />
+              </button>
+            </div>
+          </div>
+        )}
+
+        <div className="border border-border rounded-lg px-2 py-2 bg-card flex items-center gap-1.5">
+          {/* + button — opens image upload dropup */}
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <button
+                type="button"
+                className="w-7 h-7 flex items-center justify-center rounded-md text-muted-foreground hover:text-ink hover:bg-canvas/60 transition-colors shrink-0"
+              >
+                <Plus size={15} />
+              </button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent
+              side="top"
+              align="start"
+              className="min-w-40 bg-chrome border-border"
+            >
+              <DropdownMenuItem
+                onSelect={() => fileInputRef.current?.click()}
+                className="flex items-center gap-2 text-[13px] cursor-pointer"
+              >
+                <ImageIcon size={13} />
+                Add image
+              </DropdownMenuItem>
+            </DropdownMenuContent>
+          </DropdownMenu>
+
           <input
-            className="flex-1 text-[13px] bg-transparent outline-none placeholder:text-muted-foreground"
+            ref={fileInputRef}
+            type="file"
+            accept="image/*"
+            className="hidden"
+            onChange={handleFileChange}
+          />
+
+          {/* Slides context badge */}
+          <div className="flex items-center gap-1 px-1.5 py-0.5 rounded bg-canvas border border-border text-[10px] text-muted-foreground shrink-0 select-none">
+            <ImageIcon size={10} />
+            1 slide selected
+          </div>
+
+          <input
+            className="flex-1 text-[13px] bg-transparent outline-none placeholder:text-muted-foreground min-w-0"
             placeholder="Ask about this scene…"
             value={draft}
             onChange={(e) => setDraft(e.target.value)}

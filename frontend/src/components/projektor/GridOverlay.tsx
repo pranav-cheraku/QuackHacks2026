@@ -38,10 +38,7 @@ export function GridOverlay({ visible }: Props) {
   const majorRows = rangeByStep(GRID_ROWS, MAJOR_STEP).filter(
     (y) => y > 0 && y < GRID_ROWS,
   );
-  const labeledRows = unique([
-    ...rangeByStep(GRID_ROWS, MAJOR_STEP),
-    GRID_ROWS,
-  ]);
+  const labeledRows = unique([...rangeByStep(GRID_ROWS, MAJOR_STEP), GRID_ROWS]);
 
   return (
     <svg
@@ -50,14 +47,7 @@ export function GridOverlay({ visible }: Props) {
       preserveAspectRatio="none"
       aria-hidden="true"
     >
-      <rect
-        x="0"
-        y="0"
-        width={GRID_COLS}
-        height={GRID_ROWS}
-        fill={TEAL}
-        opacity="0.025"
-      />
+      <rect x="0" y="0" width={GRID_COLS} height={GRID_ROWS} fill={TEAL} opacity="0.025" />
 
       {minorCols.map((x) => (
         <line
@@ -110,44 +100,14 @@ export function GridOverlay({ visible }: Props) {
       ))}
 
       {/* Edge strips are rects, not centered strokes, so they are flush with the slide bounds. */}
-      <rect
-        x="0"
-        y="0"
-        width={EDGE_WIDTH}
-        height={GRID_ROWS}
-        fill={TEAL}
-        opacity="0.55"
-      />
-      <rect
-        x={GRID_COLS - EDGE_WIDTH}
-        y="0"
-        width={EDGE_WIDTH}
-        height={GRID_ROWS}
-        fill={TEAL}
-        opacity="0.55"
-      />
-      <rect
-        x="0"
-        y="0"
-        width={GRID_COLS}
-        height={EDGE_WIDTH}
-        fill={TEAL}
-        opacity="0.55"
-      />
-      <rect
-        x="0"
-        y={GRID_ROWS - EDGE_WIDTH}
-        width={GRID_COLS}
-        height={EDGE_WIDTH}
-        fill={TEAL}
-        opacity="0.55"
-      />
+      <rect x="0" y="0" width={EDGE_WIDTH} height={GRID_ROWS} fill={TEAL} opacity="0.55" />
+      <rect x={GRID_COLS - EDGE_WIDTH} y="0" width={EDGE_WIDTH} height={GRID_ROWS} fill={TEAL} opacity="0.55" />
+      <rect x="0" y="0" width={GRID_COLS} height={EDGE_WIDTH} fill={TEAL} opacity="0.55" />
+      <rect x="0" y={GRID_ROWS - EDGE_WIDTH} width={GRID_COLS} height={EDGE_WIDTH} fill={TEAL} opacity="0.55" />
 
       {labeledRows.map((row) =>
         rangeByStep(GRID_COLS, MAJOR_STEP).map((col) => {
-          const edge =
-            (col === 0 || col === GRID_COLS) &&
-            (row === 0 || row === GRID_ROWS);
+          const edge = (col === 0 || col === GRID_COLS) && (row === 0 || row === GRID_ROWS);
           const x = Math.min(col + 22, GRID_COLS - 560);
           const y = Math.min(row + LABEL_SIZE + 10, GRID_ROWS - 20);
 
@@ -168,10 +128,7 @@ export function GridOverlay({ visible }: Props) {
         }),
       )}
 
-      <g
-        transform={`translate(${GRID_COLS - 1770}, ${GRID_ROWS - 250})`}
-        opacity="0.88"
-      >
+      <g transform={`translate(${GRID_COLS - 1770}, ${GRID_ROWS - 250})`} opacity="0.88">
         <rect width="1720" height="170" rx="20" fill={TEAL} />
         <text
           x="85"
@@ -182,8 +139,7 @@ export function GridOverlay({ visible }: Props) {
           fontWeight="700"
           letterSpacing="6"
         >
-          {GRID_COLS.toLocaleString()} x {GRID_ROWS.toLocaleString()} - snap{" "}
-          {SNAP_STEP}
+          {GRID_COLS.toLocaleString()} x {GRID_ROWS.toLocaleString()} - snap {SNAP_STEP}
         </text>
       </g>
     </svg>

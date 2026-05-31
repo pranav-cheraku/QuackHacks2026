@@ -1,3 +1,6 @@
+import type { LayoutNode } from "./ir";
+import { emptyRoot } from "./ir";
+
 export type ComponentType =
   | "Header"
   | "Subheader"
@@ -27,144 +30,219 @@ export const MEDIA_COMPONENTS: ComponentType[] = [
   "Byline",
 ];
 
-// --- Graph-view node model -------------------------------------------------
-// `kind` drives the card preview + the type label; `status` drives the pill.
+// ── Graph-view scene metadata types ──────────────────────────────────────────
 export type SceneKind = "title" | "problem" | "data";
 export type SceneStatus = "final" | "draft" | "in-review";
-
-// `role` is the scene's narrative job (shown + editable in the Inspect panel).
 export type SceneRole = "claim" | "evidence" | "data" | "title";
+export type EdgeRelation = "supports" | "contrasts" | "builds-on" | "sequence";
 
-// A content block on a scene (the slide's "ingredients"). Listed in Inspect's
-// "Content blocks"; step 10 will also tether these to the canvas as sub-nodes.
 export interface ContentBlock {
   id: string;
   type: ComponentType;
   label: string;
 }
 
-// Legacy fields (`state`, `thumb`) are still consumed by the Slides View
-// (EditorView / SlideThumb). Kept until that view is reworked.
 export type SlideState = "rendered" | "ingredient";
 
-// Slides View (slide editor) — a design alternative for a scene.
 export interface SlideCandidate {
   id: string;
   label: string;
-  elements: import("./slide-model").SlideElement[];
+  root: LayoutNode;
 }
 
 export interface SlideNode {
   id: string;
   index: number;
   title: string;
+  x: number;
+  y: number;
+  // Editor-required fields (optional so graph-view ghost nodes can omit them)
+  rotation?: number;
+  components?: ComponentType[];
+  root?: LayoutNode;
+  candidates?: SlideCandidate[];
+  activeDesignId?: string | null;
+  state: SlideState;
+  thumb: "title" | "stats" | "chart" | "list" | "closing";
+  width?: number;
+  height?: number;
+  // Graph-view metadata (required by graph view for display + filtering)
   kind: SceneKind;
   status: SceneStatus;
   eyebrow?: string;
   body?: string;
-  x: number;
-  y: number;
-  width?: number;
-  height?: number;
-  // Graph-view Inspect panel fields (all optional).
   role?: SceneRole;
   locked?: boolean;
   blocks?: ContentBlock[];
-  // Ghost (AI-suggested branch) fields. A ghost is a proposed-but-uncommitted
-  // scene: Accept promotes it; Discard sets `discarded` (dimmed but revisitable).
   ghost?: boolean;
   discarded?: boolean;
   rationale?: string;
-  // legacy — Slides View only
-  state: SlideState;
-  thumb: "title" | "stats" | "chart" | "list" | "closing";
-  // Slides View (slide editor) — element model + design candidates.
-  elements: import("./slide-model").SlideElement[];
-  candidates: SlideCandidate[];
-  activeDesignId: string | null;
 }
 
-export type EdgeRelation = "supports" | "contrasts" | "builds-on" | "sequence";
-
 export interface Edge {
+  id?: string;
   from: string;
   to: string;
+  type?: "narrative" | "branch" | "reference";
   relation?: EdgeRelation;
   dashed?: boolean;
+}
+
+export interface Variant {
+  id: string;
+  parentId: string;
+  x: number;
+  y: number;
+  rotation: number;
+  layout: "stacked" | "split" | "centered";
+  chosen?: boolean;
 }
 
 export const INITIAL_NODES: SlideNode[] = [
   {
     id: "n1",
     index: 1,
-    title: "Logistics that thinks ahead.",
-    kind: "title",
-    status: "final",
-    eyebrow: "SERIES A · 2026",
-    body: "Meridian turns fleet telemetry into decisions — before the delay happens.",
-    x: 560,
-    y: 70,
-    width: 340,
-    height: 190,
-    role: "title",
-    locked: false,
-    blocks: [
-      { id: "n1-b1", type: "Header", label: "Logistics that thinks ahead." },
-      { id: "n1-b2", type: "Subheader", label: "Series A · 2026" },
-    ],
+    title: "Title",
+    x: 80,
+    y: 80,
+    rotation: -1.2,
     state: "rendered",
+    components: [],
     thumb: "title",
-    elements: [],
+    width: 280,
+    height: 170,
+    root: emptyRoot("n1"),
     candidates: [],
     activeDesignId: null,
+    kind: "title",
+    status: "final",
   },
   {
     id: "n2",
     index: 2,
-    title: "The problem we avoid",
-    kind: "problem",
-    status: "draft",
-    x: 390,
-    y: 370,
-    width: 300,
-    height: 180,
-    role: "claim",
-    locked: false,
-    blocks: [
-      { id: "n2-b1", type: "Body", label: "Reactive logistics burns margin." },
-      { id: "n2-b2", type: "List", label: "3 failure modes" },
-    ],
-    state: "ingredient",
-    thumb: "list",
-    elements: [],
+    title: "By the Numbers",
+    x: 430,
+    y: 150,
+    rotation: 0.8,
+    state: "rendered",
+    components: [],
+    thumb: "stats",
+    width: 280,
+    height: 170,
+    root: emptyRoot("n2"),
     candidates: [],
     activeDesignId: null,
+    kind: "data",
+    status: "draft",
   },
   {
     id: "n3",
     index: 3,
-    title: "Pipeline → revenue",
-    kind: "data",
-    status: "in-review",
-    x: 760,
-    y: 370,
-    width: 320,
-    height: 180,
-    role: "data",
-    locked: false,
-    blocks: [
-      { id: "n3-b1", type: "Stat", label: "+38% on-time delivery" },
-      { id: "n3-b2", type: "Chart", label: "Quarterly revenue" },
-    ],
-    state: "rendered",
-    thumb: "chart",
-    elements: [],
+    title: "Market Landscape",
+    x: 800,
+    y: 90,
+    rotation: -0.6,
+    state: "ingredient",
+    components: ["Header", "Image", "Body"],
+    thumb: "title",
+    width: 260,
+    height: 220,
+    root: emptyRoot("n3"),
     candidates: [],
     activeDesignId: null,
+    kind: "problem",
+    status: "draft",
+  },
+  {
+    id: "n4",
+    index: 4,
+    title: "Growth Trajectory",
+    x: 1140,
+    y: 200,
+    rotation: 1.4,
+    state: "rendered",
+    components: [],
+    thumb: "chart",
+    width: 280,
+    height: 170,
+    root: emptyRoot("n4"),
+    candidates: [],
+    activeDesignId: null,
+    kind: "data",
+    status: "draft",
+  },
+  {
+    id: "n5",
+    index: 5,
+    title: "Three Bets for Q4",
+    x: 1480,
+    y: 110,
+    rotation: -0.4,
+    state: "rendered",
+    components: [],
+    thumb: "list",
+    width: 280,
+    height: 170,
+    root: emptyRoot("n5"),
+    candidates: [],
+    activeDesignId: null,
+    kind: "problem",
+    status: "in-review",
+  },
+  {
+    id: "n6",
+    index: 6,
+    title: "Closing",
+    x: 1820,
+    y: 200,
+    rotation: 0.6,
+    state: "rendered",
+    components: [],
+    thumb: "closing",
+    width: 280,
+    height: 170,
+    root: emptyRoot("n6"),
+    candidates: [],
+    activeDesignId: null,
+    kind: "title",
+    status: "final",
   },
 ];
 
 export const INITIAL_EDGES: Edge[] = [
-  { from: "n1", to: "n2", relation: "contrasts" },
-  { from: "n1", to: "n3", relation: "supports" },
+  { id: "e1", from: "n1", to: "n2", type: "narrative" },
+  { id: "e2", from: "n2", to: "n3", type: "narrative" },
+  { id: "e3", from: "n3", to: "n4", type: "narrative" },
+  { id: "e4", from: "n4", to: "n5", type: "narrative" },
+  { id: "e5", from: "n5", to: "n6", type: "narrative" },
+];
+
+export const INITIAL_VARIANTS: Variant[] = [
+  {
+    id: "v1",
+    parentId: "n3",
+    x: 720,
+    y: 410,
+    rotation: -2,
+    layout: "stacked",
+    chosen: false,
+  },
+  {
+    id: "v2",
+    parentId: "n3",
+    x: 880,
+    y: 450,
+    rotation: 1.2,
+    layout: "centered",
+    chosen: true,
+  },
+  {
+    id: "v3",
+    parentId: "n3",
+    x: 1040,
+    y: 420,
+    rotation: -0.8,
+    layout: "split",
+    chosen: false,
+  },
 ];

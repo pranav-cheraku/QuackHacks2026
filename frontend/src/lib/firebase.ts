@@ -1,15 +1,16 @@
-import { initializeApp, getApps } from "firebase/app";
-import { getAuth } from "firebase/auth";
+import { initializeApp, getApps } from 'firebase/app';
+import { getFirestore } from 'firebase/firestore';
+import { getAuth } from 'firebase/auth';
 
 const firebaseConfig = {
-  apiKey: "AIzaSyAKFLXr7dSlzb1TqQWA6uLlnQQyU6oXNUk",
-  authDomain: "quackhacks-93c64.firebaseapp.com",
-  projectId: "quackhacks-93c64",
-  storageBucket: "quackhacks-93c64.firebasestorage.app",
-  messagingSenderId: "830653967338",
-  appId: "1:830653967338:web:00da53ce1d1175faea2093",
-  measurementId: "G-6VKZ31FLKC",
+  apiKey:            import.meta.env.VITE_FIREBASE_API_KEY,
+  authDomain:        import.meta.env.VITE_FIREBASE_AUTH_DOMAIN,
+  projectId:         import.meta.env.VITE_FIREBASE_PROJECT_ID,
+  storageBucket:     import.meta.env.VITE_FIREBASE_STORAGE_BUCKET,
+  messagingSenderId: import.meta.env.VITE_FIREBASE_MESSAGING_SENDER_ID,
+  appId:             import.meta.env.VITE_FIREBASE_APP_ID,
 };
 
 const app = getApps().length ? getApps()[0] : initializeApp(firebaseConfig);
+export const db   = getFirestore(app);
 export const auth = getAuth(app);

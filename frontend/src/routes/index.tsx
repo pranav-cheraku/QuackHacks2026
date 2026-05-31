@@ -4,6 +4,7 @@ import { TopBar } from "@/components/projektor/TopBar";
 import { BoardView } from "@/components/projektor/BoardView";
 import { EditorView } from "@/components/projektor/EditorView";
 import { useAuth } from "@/context/AuthContext";
+import { DEFAULT_ZOOM, ZOOM_STEP, clampZoom, zoomBy } from "@/lib/viewport";
 
 export const Route = createFileRoute("/")({
   head: () => ({
@@ -22,9 +23,8 @@ export const Route = createFileRoute("/")({
 function Projektor() {
   const { currentUser, loading } = useAuth();
   const navigate = useNavigate();
-  // All hooks must be declared before any conditional returns
   const [mode, setMode] = useState<"board" | "editor">("board");
-  const [zoom, setZoom] = useState(1);
+  const [zoom, setZoomState] = useState(DEFAULT_ZOOM);
   const [isGridVisible, setIsGridVisible] = useState(false);
   const [editorStart, setEditorStart] = useState<string | null>(null);
 
@@ -34,8 +34,23 @@ function Projektor() {
     }
   }, [loading, currentUser, navigate]);
 
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (!e.metaKey && !e.ctrlKey) return;
+      const isZoomIn = e.key === "+" || e.key === "=" || e.code === "NumpadAdd";
+      const isZoomOut = e.key === "-" || e.key === "_" || e.code === "NumpadSubtract";
+      if (!isZoomIn && !isZoomOut) return;
+      e.preventDefault();
+      if (isZoomIn) setZoomState((current) => zoomBy(current, ZOOM_STEP));
+      if (isZoomOut) setZoomState((current) => zoomBy(current, -ZOOM_STEP));
+    };
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, []);
+
   if (loading || !currentUser) return null;
 
+  const setZoom = (nextZoom: number) => setZoomState(clampZoom(nextZoom));
   const toggleGrid = () => setIsGridVisible((v) => !v);
 
   return (

@@ -8,37 +8,53 @@ import {
   DialogTitle,
   DialogTrigger,
 } from "@/components/ui/dialog";
-import { ADD_MEDIA, ADD_TEXT, blockIcon } from "@/lib/content-blocks";
-import type { ComponentType, ContentBlock } from "@/lib/projektor-data";
+import {
+  AlignLeft, BarChart3, Hash, Heading, Heading2,
+  Image as ImageIcon, List as ListIcon, Quote, Video,
+  type LucideIcon,
+} from "lucide-react";
+import type { ContentNode, TextPayload } from "@/lib/ir";
 
-type Draft = Omit<ContentBlock, "id">;
+// ContentNode without id/graphPosition — caller supplies those.
+type Draft = Omit<ContentNode, "id" | "graphPosition" | "sourceRef" | "assignedSceneId">;
 
-// Types whose content is plain text (everything except Image/Video/Chart).
-const isTextType = (t: ComponentType) =>
-  t !== "Image" && t !== "Video" && t !== "Chart";
-// Longer text gets a textarea; short labels get a single line.
-const MULTILINE = new Set<ComponentType>(["Body", "List", "Quote"]);
+type TextRole = TextPayload["role"];
 
-const labelOf = (t: ComponentType) =>
-  [...ADD_TEXT, ...ADD_MEDIA].find((o) => o.type === t)?.label ?? t;
+const TEXT_OPTIONS: { role: TextRole; label: string; icon: LucideIcon }[] = [
+  { role: "header",    label: "Header",       icon: Heading   },
+  { role: "subheader", label: "Subheader",    icon: Heading2  },
+  { role: "body",      label: "Body",         icon: AlignLeft },
+  { role: "bullet",    label: "Bullet list",  icon: ListIcon  },
+  { role: "stat",      label: "Stat / number",icon: Hash      },
+  { role: "quote",     label: "Quote",        icon: Quote     },
+];
+
+type MediaKind = "image" | "video" | "data";
+const MEDIA_OPTIONS: { kind: MediaKind; label: string; icon: LucideIcon }[] = [
+  { kind: "image", label: "Image",  icon: ImageIcon  },
+  { kind: "video", label: "Video",  icon: Video      },
+  { kind: "data",  label: "Chart",  icon: BarChart3  },
+];
+
+type PickedType =
+  | { tag: "text"; role: TextRole }
+  | { tag: "media"; kind: MediaKind };
 
 const baseInput =
   "px-2.5 py-1.5 rounded-lg border border-border bg-card text-[13px] text-ink outline-none focus:border-[color:var(--accent)] transition-colors";
 const inputCls = `${baseInput} w-full`;
 
-// "+ Add content" → a single popup: step 1 pick a type, step 2 fill its content.
-// Shared by the Inspect panel and the content-graph screen so they stay in sync.
-// `variant` styles the trigger: "block" = full-width dashed (inspector list),
-// "pill" = a solid floating button (on the content-graph canvas).
+const MULTILINE_ROLES = new Set<TextRole>(["body", "bullet", "quote"]);
+
 export function AddContent({
   onAdd,
   variant = "block",
 }: {
-  onAdd: (block: Draft) => void;
+  onAdd: (draft: Draft) => void;
   variant?: "block" | "pill";
 }) {
   const [open, setOpen] = useState(false);
-  const [type, setType] = useState<ComponentType | null>(null);
+  const [picked, setPicked] = useState<PickedType | null>(null);
   const [text, setText] = useState("");
   const [img, setImg] = useState<{ src: string; name: string } | null>(null);
   const [url, setUrl] = useState("");
@@ -49,53 +65,58 @@ export function AddContent({
   ]);
 
   const reset = () => {
-    setType(null);
+    setPicked(null);
     setText("");
     setImg(null);
     setUrl("");
     setChartTitle("");
-    setRows([
-      { label: "", value: "" },
-      { label: "", value: "" },
-    ]);
+    setRows([{ label: "", value: "" }, { label: "", value: "" }]);
   };
-  const close = () => {
-    setOpen(false);
-    reset();
-  };
+  const close = () => { setOpen(false); reset(); };
 
-  const canAdd =
-    type === null
-      ? false
-      : type === "Image"
-        ? !!img
-        : type === "Video"
-          ? url.trim().length > 0
-          : type === "Chart"
-            ? chartTitle.trim().length > 0
-            : text.trim().length > 0;
+  const canAdd = !picked
+    ? false
+    : picked.tag === "media" && picked.kind === "image"
+      ? !!img
+      : picked.tag === "media" && picked.kind === "video"
+        ? url.trim().length > 0
+        : picked.tag === "media" && picked.kind === "data"
+          ? chartTitle.trim().length > 0
+          : text.trim().length > 0;
 
   const submit = () => {
-    if (!type || !canAdd) return;
-    let block: Draft;
-    if (type === "Image") {
-      block = { type, label: img!.name || "Image", src: img!.src };
-    } else if (type === "Video") {
-      block = { type, label: url.trim(), url: url.trim() };
-    } else if (type === "Chart") {
-      block = {
-        type,
-        label: chartTitle.trim(),
-        data: rows
-          .filter((r) => r.label.trim())
-          .map((r) => ({ label: r.label.trim(), value: Number(r.value) || 0 })),
+    if (!picked || !canAdd) return;
+    let draft: Draft;
+    if (picked.tag === "media" && picked.kind === "image") {
+      draft = { kind: "image", payload: { url: img!.src, caption: img!.name } };
+    } else if (picked.tag === "media" && picked.kind === "video") {
+      draft = { kind: "video", payload: { url: url.trim() } };
+    } else if (picked.tag === "media" && picked.kind === "data") {
+      draft = {
+        kind: "data",
+        payload: {
+          chart: {
+            type: "bar",
+            data: { values: rows.filter((r) => r.label.trim()).map((r) => ({ label: r.label.trim(), value: Number(r.value) || 0 })) },
+            title: chartTitle.trim(),
+          },
+        },
       };
+    } else if (picked.tag === "text") {
+      const t = text.trim();
+      draft = { kind: "text", payload: { role: picked.role, text: t } };
     } else {
-      block = { type, label: text.trim(), text: text.trim() };
+      return;
     }
-    onAdd(block);
+    onAdd(draft);
     close();
   };
+
+  const pickedLabel = picked
+    ? picked.tag === "text"
+      ? TEXT_OPTIONS.find((o) => o.role === picked.role)?.label ?? picked.role
+      : MEDIA_OPTIONS.find((o) => o.kind === picked.kind)?.label ?? picked.kind
+    : null;
 
   return (
     <Dialog open={open} onOpenChange={(o) => (o ? setOpen(true) : close())}>
@@ -124,7 +145,7 @@ export function AddContent({
       >
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2 text-[15px]">
-            {type && (
+            {picked && (
               <button
                 type="button"
                 aria-label="Back to types"
@@ -134,37 +155,35 @@ export function AddContent({
                 <ChevronLeft size={16} />
               </button>
             )}
-            {type ? `Add ${labelOf(type)}` : "Add content"}
+            {picked ? `Add ${pickedLabel}` : "Add content"}
           </DialogTitle>
         </DialogHeader>
 
         {/* Step 1 — type picker */}
-        {!type ? (
+        {!picked ? (
           <div className="space-y-3">
             <TypeGroup
               label="Text"
-              items={ADD_TEXT}
-              onPick={(t) => setType(t)}
+              items={TEXT_OPTIONS.map((o) => ({ key: o.role, label: o.label, icon: o.icon }))}
+              onPick={(key) => setPicked({ tag: "text", role: key as TextRole })}
             />
             <TypeGroup
               label="Media"
-              items={ADD_MEDIA}
-              onPick={(t) => setType(t)}
+              items={MEDIA_OPTIONS.map((o) => ({ key: o.kind, label: o.label, icon: o.icon }))}
+              onPick={(key) => setPicked({ tag: "media", kind: key as MediaKind })}
             />
           </div>
         ) : (
           /* Step 2 — content form */
           <div className="space-y-3">
-            {isTextType(type) &&
-              (MULTILINE.has(type) ? (
+            {picked.tag === "text" &&
+              (MULTILINE_ROLES.has(picked.role) ? (
                 <textarea
                   autoFocus
                   rows={4}
                   value={text}
                   onChange={(e) => setText(e.target.value)}
-                  placeholder={
-                    type === "List" ? "One item per line…" : "Enter text…"
-                  }
+                  placeholder={picked.role === "bullet" ? "One item per line…" : "Enter text…"}
                   className={`${inputCls} resize-none`}
                 />
               ) : (
@@ -172,14 +191,12 @@ export function AddContent({
                   autoFocus
                   value={text}
                   onChange={(e) => setText(e.target.value)}
-                  placeholder={
-                    type === "Stat" ? "e.g. +38% on-time" : "Enter text…"
-                  }
+                  placeholder={picked.role === "stat" ? "e.g. +38% on-time" : "Enter text…"}
                   className={inputCls}
                 />
               ))}
 
-            {type === "Image" && (
+            {picked.tag === "media" && picked.kind === "image" && (
               <label className="block cursor-pointer">
                 <input
                   type="file"
@@ -187,8 +204,7 @@ export function AddContent({
                   className="hidden"
                   onChange={(e) => {
                     const f = e.target.files?.[0];
-                    if (f)
-                      setImg({ src: URL.createObjectURL(f), name: f.name });
+                    if (f) setImg({ src: URL.createObjectURL(f), name: f.name });
                   }}
                 />
                 {img ? (
@@ -205,15 +221,13 @@ export function AddContent({
                 ) : (
                   <div className="flex flex-col items-center justify-center gap-2 py-8 rounded-lg border border-dashed border-border text-muted-foreground hover:border-[color:var(--accent)] hover:text-ink transition-colors">
                     <Upload size={20} />
-                    <span className="text-[12px]">
-                      Click to upload an image
-                    </span>
+                    <span className="text-[12px]">Click to upload an image</span>
                   </div>
                 )}
               </label>
             )}
 
-            {type === "Video" && (
+            {picked.tag === "media" && picked.kind === "video" && (
               <div className="space-y-1.5">
                 <input
                   autoFocus
@@ -228,7 +242,7 @@ export function AddContent({
               </div>
             )}
 
-            {type === "Chart" && (
+            {picked.tag === "media" && picked.kind === "data" && (
               <div className="space-y-2.5">
                 <input
                   autoFocus
@@ -243,11 +257,7 @@ export function AddContent({
                       <input
                         value={r.label}
                         onChange={(e) =>
-                          setRows((rs) =>
-                            rs.map((x, j) =>
-                              j === i ? { ...x, label: e.target.value } : x,
-                            ),
-                          )
+                          setRows((rs) => rs.map((x, j) => j === i ? { ...x, label: e.target.value } : x))
                         }
                         placeholder="Label"
                         className={`${baseInput} flex-1 min-w-0`}
@@ -256,11 +266,7 @@ export function AddContent({
                         type="number"
                         value={r.value}
                         onChange={(e) =>
-                          setRows((rs) =>
-                            rs.map((x, j) =>
-                              j === i ? { ...x, value: e.target.value } : x,
-                            ),
-                          )
+                          setRows((rs) => rs.map((x, j) => j === i ? { ...x, value: e.target.value } : x))
                         }
                         placeholder="Value"
                         className={`${baseInput} w-20 shrink-0`}
@@ -269,9 +275,7 @@ export function AddContent({
                         type="button"
                         aria-label="Remove row"
                         onClick={() =>
-                          setRows((rs) =>
-                            rs.length > 1 ? rs.filter((_, j) => j !== i) : rs,
-                          )
+                          setRows((rs) => rs.length > 1 ? rs.filter((_, j) => j !== i) : rs)
                         }
                         className="text-faint hover:text-danger transition-colors shrink-0"
                       >
@@ -282,9 +286,7 @@ export function AddContent({
                 </div>
                 <button
                   type="button"
-                  onClick={() =>
-                    setRows((rs) => [...rs, { label: "", value: "" }])
-                  }
+                  onClick={() => setRows((rs) => [...rs, { label: "", value: "" }])}
                   className="flex items-center gap-1 text-[12px] font-medium text-accent hover:opacity-80 transition-opacity"
                 >
                   <Plus size={12} /> Add row
@@ -294,7 +296,7 @@ export function AddContent({
           </div>
         )}
 
-        {type && (
+        {picked && (
           <DialogFooter className="gap-2">
             <button
               type="button"
@@ -325,8 +327,8 @@ function TypeGroup({
   onPick,
 }: {
   label: string;
-  items: { type: ComponentType; label: string }[];
-  onPick: (t: ComponentType) => void;
+  items: { key: string; label: string; icon: LucideIcon }[];
+  onPick: (key: string) => void;
 }) {
   return (
     <div>
@@ -335,12 +337,12 @@ function TypeGroup({
       </div>
       <div className="grid grid-cols-2 gap-1.5">
         {items.map((o) => {
-          const Icon = blockIcon(o.type);
+          const Icon = o.icon;
           return (
             <button
-              key={o.type}
+              key={o.key}
               type="button"
-              onClick={() => onPick(o.type)}
+              onClick={() => onPick(o.key)}
               className="flex items-center gap-2 px-2.5 py-2 rounded-lg border border-border bg-card text-[13px] text-ink hover:border-[color:var(--accent)] hover:bg-canvas/50 transition-colors"
             >
               <Icon size={15} className="text-muted-foreground shrink-0" />

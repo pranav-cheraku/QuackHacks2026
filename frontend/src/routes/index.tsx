@@ -32,7 +32,7 @@ export const Route = createFileRoute("/")({
 
 function Projektor() {
   const { projectId } = Route.useSearch();
-  const { currentUser, loading } = useAuth();
+  const { currentUser } = useAuth();
   const navigate = useNavigate();
 
   const [phase, setPhase] = useState<"landing" | "app">(
@@ -54,12 +54,6 @@ function Projektor() {
   // Tracks the active project ID so saves go to the right Firestore document.
   const [currentProjectId, setCurrentProjectId] = useState<string | null>(projectId ?? null);
   const saveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-
-  useEffect(() => {
-    if (!loading && !currentUser) {
-      navigate({ to: "/signin" });
-    }
-  }, [loading, currentUser, navigate]);
 
   // Load the project from Firestore when a projectId is present in the URL.
   // Runs whenever projectId changes so navigating between projects works correctly.
@@ -117,7 +111,6 @@ function Projektor() {
     return () => window.removeEventListener("keydown", handleKeyDown);
   }, []);
 
-  if (loading || !currentUser) return null;
 
   const setZoom = (nextZoom: number) => setZoomState(clampZoom(nextZoom));
   const toggleGrid = () => setIsGridVisible((v) => !v);
@@ -127,7 +120,7 @@ function Projektor() {
   const handleGenerate = async ({ nodes, edges, contentPool: pool }: HydrateResult) => {
     createDeck(nodes, edges); // keep session store in sync for any session-only consumers
     const name = nodes[0]?.title ?? "Untitled";
-    const newProjectId = await createProject(currentUser.uid, name, nodes, edges, pool);
+    const newProjectId = await createProject(currentUser!.uid, name, nodes, edges, pool);
     setCurrentProjectId(newProjectId);
     setDeck(nodes);
     setDeckEdges(edges);

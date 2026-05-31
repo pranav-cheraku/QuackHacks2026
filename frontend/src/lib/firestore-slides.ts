@@ -5,6 +5,7 @@ import {
 import { db } from './firebase';
 import type { SlideNode, Edge } from './projektor-data';
 import type { ContentNode } from './ir';
+import { emptyRoot } from './ir';
 
 // Firestore rejects `undefined` — strip it before every write.
 function serialize(value: unknown): unknown {
@@ -79,7 +80,7 @@ export async function loadDeck(uid: string, projectId: string): Promise<{
   const data = snap.data();
   if (!Array.isArray(data.nodes) || data.nodes.length === 0) return null;
   return {
-    nodes: data.nodes as SlideNode[],
+    nodes: (data.nodes as SlideNode[]).map((n) => n.root ? n : { ...n, root: emptyRoot(n.id) }),
     edges: Array.isArray(data.edges) ? (data.edges as Edge[]) : [],
     contentPool: Array.isArray(data.contentPool) ? (data.contentPool as ContentNode[]) : [],
     name: data.name as string | undefined,

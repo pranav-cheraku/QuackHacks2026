@@ -14,7 +14,7 @@ export const Route = createFileRoute("/dashboard")({
 
 function Dashboard() {
   const navigate = useNavigate();
-  const { currentUser, loading } = useAuth();
+  const { currentUser } = useAuth();
   const [projects, setProjects] = useState<ProjectMeta[]>([]);
 
   useEffect(() => {
@@ -23,8 +23,6 @@ function Dashboard() {
       .then(setProjects)
       .catch((err) => console.error("[Dashboard] Failed to load projects:", err));
   }, [currentUser]);
-
-  if (loading) return null;
 
   return (
     <div className="min-h-screen bg-background text-ink">

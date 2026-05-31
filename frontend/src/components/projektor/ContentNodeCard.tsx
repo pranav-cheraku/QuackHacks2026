@@ -1,4 +1,5 @@
 import { useEffect, useRef } from "react";
+import { Link } from "lucide-react";
 import type { ContentNode, TextPayload, ImagePayload } from "@/lib/ir";
 
 interface Props {
@@ -8,6 +9,7 @@ interface Props {
   onSelect: () => void;
   onMove: (x: number, y: number) => void;
   onMeasure?: (height: number) => void;
+  onBeginWire?: (e: React.MouseEvent) => void;
   zoom: number;
 }
 
@@ -24,6 +26,7 @@ export function ContentNodeCard({
   onSelect,
   onMove,
   onMeasure,
+  onBeginWire,
   zoom,
 }: Props) {
   const dragging = useRef<{ ox: number; oy: number } | null>(null);
@@ -74,10 +77,23 @@ export function ContentNodeCard({
 
   return (
     <div
-      className="absolute select-none transition-opacity"
+      className="absolute select-none transition-opacity group"
       style={{ left: pos.x, top: pos.y, width: 220, opacity: dimmed ? 0.4 : 1 }}
       onMouseDown={onMouseDown}
     >
+      {/* Connect port — top-center, drag to assign to a slide */}
+      {onBeginWire && (
+        <button
+          type="button"
+          title="Drag to assign to a slide"
+          data-no-drag
+          onMouseDown={(e) => { e.stopPropagation(); onBeginWire(e); }}
+          className="absolute left-1/2 -translate-x-1/2 -top-3 z-10 flex items-center justify-center w-[22px] h-[22px] rounded-full bg-[var(--accent)] text-white border-2 border-white shadow-[var(--sh-v)] cursor-grab opacity-0 group-hover:opacity-100 hover:scale-110 transition-all"
+        >
+          <Link size={10} strokeWidth={2.5} />
+        </button>
+      )}
+
       <div
         ref={cardRef}
         className={`rounded-xl bg-card border transition-all cursor-grab active:cursor-grabbing ${

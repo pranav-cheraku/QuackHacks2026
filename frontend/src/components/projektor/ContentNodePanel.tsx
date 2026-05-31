@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { Trash2, X } from "lucide-react";
-import type { ContentNode, TextPayload, ImagePayload } from "@/lib/ir";
+import type { ContentNode, TextPayload, ImagePayload, VideoPayload } from "@/lib/ir";
 
 interface Props {
   node: ContentNode;
@@ -10,28 +10,47 @@ interface Props {
 }
 
 const ROLES: { value: TextPayload["role"]; label: string; hint: string }[] = [
-  { value: "claim",    label: "H1",    hint: "Large headline — primary claim" },
-  { value: "evidence", label: "Body",  hint: "Supporting body text" },
-  { value: "aside",    label: "Quote", hint: "Italic aside or pull-quote" },
+  { value: "header",    label: "H1",    hint: "Large headline" },
+  { value: "subheader", label: "H2",    hint: "Subheading" },
+  { value: "body",      label: "Body",  hint: "Body paragraph" },
+  { value: "bullet",    label: "List",  hint: "Bullet list" },
+  { value: "stat",      label: "Stat",  hint: "Large statistic or number" },
+  { value: "quote",     label: "Quote", hint: "Pull quote or aside" },
 ];
+
+// Map old stored role values to the canonical new ones so the picker always
+// highlights the right button even on data written before the rename.
+const ROLE_ALIAS: Partial<Record<TextPayload["role"], TextPayload["role"]>> = {
+  claim: "header", evidence: "body", aside: "quote",
+};
+function canonicalRole(r: TextPayload["role"]): TextPayload["role"] {
+  return ROLE_ALIAS[r] ?? r;
+}
 
 export function ContentNodePanel({ node, onClose, onChange, onDelete }: Props) {
   const textPayload = node.kind === "text" ? (node.payload as TextPayload) : null;
   const imagePayload = node.kind === "image" ? (node.payload as ImagePayload) : null;
+  const videoPayload = node.kind === "video" ? (node.payload as VideoPayload) : null;
 
   const [text, setText] = useState(textPayload?.text ?? "");
-  const [role, setRole] = useState<TextPayload["role"]>(textPayload?.role ?? "claim");
-  const [url, setUrl] = useState(imagePayload?.url ?? "");
-  const [caption, setCaption] = useState(imagePayload?.caption ?? "");
+  const [role, setRole] = useState<TextPayload["role"]>(
+    textPayload ? canonicalRole(textPayload.role) : "header",
+  );
+  const [url, setUrl] = useState(imagePayload?.url ?? videoPayload?.url ?? "");
+  const [caption, setCaption] = useState(imagePayload?.caption ?? videoPayload?.caption ?? "");
 
   // Sync local state when a different node is selected
   useEffect(() => {
     if (node.kind === "text") {
       const p = node.payload as TextPayload;
       setText(p.text);
-      setRole(p.role);
-    } else {
+      setRole(canonicalRole(p.role));
+    } else if (node.kind === "image") {
       const p = node.payload as ImagePayload;
+      setUrl(p.url);
+      setCaption(p.caption ?? "");
+    } else if (node.kind === "video") {
+      const p = node.payload as VideoPayload;
       setUrl(p.url);
       setCaption(p.caption ?? "");
     }
@@ -49,14 +68,21 @@ export function ContentNodePanel({ node, onClose, onChange, onDelete }: Props) {
   };
 
   const commitUrl = (nextUrl: string) => {
-    if (node.kind !== "image") return;
-    const cap = caption.trim();
-    onChange({ ...node, kind: "image", payload: cap ? { url: nextUrl, caption: cap } : { url: nextUrl } });
+    if (node.kind === "image") {
+      const cap = caption.trim();
+      onChange({ ...node, kind: "image", payload: cap ? { url: nextUrl, caption: cap } : { url: nextUrl } });
+    } else if (node.kind === "video") {
+      const cap = caption.trim();
+      onChange({ ...node, kind: "video", payload: cap ? { url: nextUrl, caption: cap } : { url: nextUrl } });
+    }
   };
 
   const commitCaption = (nextCaption: string) => {
-    if (node.kind !== "image") return;
-    onChange({ ...node, kind: "image", payload: nextCaption.trim() ? { url, caption: nextCaption.trim() } : { url } });
+    if (node.kind === "image") {
+      onChange({ ...node, kind: "image", payload: nextCaption.trim() ? { url, caption: nextCaption.trim() } : { url } });
+    } else if (node.kind === "video") {
+      onChange({ ...node, kind: "video", payload: nextCaption.trim() ? { url, caption: nextCaption.trim() } : { url } });
+    }
   };
 
   return (
@@ -68,7 +94,7 @@ export function ContentNodePanel({ node, onClose, onChange, onDelete }: Props) {
       <div className="px-4 pt-3.5 pb-3 border-b border-border shrink-0">
         <div className="flex items-center gap-2">
           <span className="font-mono text-[10px] uppercase tracking-wider text-muted-foreground">
-            {node.kind === "text" ? "Content" : "Image"}
+            {node.kind === "text" ? "Content" : node.kind === "video" ? "Video" : "Image"}
           </span>
           <button
             type="button"
@@ -89,18 +115,18 @@ export function ContentNodePanel({ node, onClose, onChange, onDelete }: Props) {
       {/* Body */}
       <div className="flex-1 overflow-y-auto px-4 py-3.5 space-y-3.5">
 
-        {/* Role picker (text nodes only) */}
+        {/* Role picker (text nodes only) — 2×3 grid */}
         {node.kind === "text" && (
           <div className="space-y-2">
             <span className="text-[12px] text-muted-foreground">Style</span>
-            <div className="flex rounded-lg border border-border overflow-hidden">
+            <div className="grid grid-cols-3 gap-1 rounded-lg border border-border overflow-hidden">
               {ROLES.map((r) => (
                 <button
                   key={r.value}
                   type="button"
                   title={r.hint}
                   onClick={() => commitRole(r.value)}
-                  className={`flex-1 py-1.5 text-[12px] font-semibold transition-colors ${
+                  className={`py-1.5 text-[11px] font-semibold transition-colors border-r border-b border-border last:border-r-0 ${
                     role === r.value
                       ? "bg-ink text-white"
                       : "bg-card text-muted-foreground hover:text-ink hover:bg-canvas/60"
@@ -111,15 +137,28 @@ export function ContentNodePanel({ node, onClose, onChange, onDelete }: Props) {
               ))}
             </div>
             {/* Live style preview */}
-            <div className="rounded-lg border border-border bg-canvas px-3 py-2.5 min-h-[40px]">
-              {role === "claim" && (
-                <span className="text-[18px] font-bold leading-tight text-ink">{text || "Headline text"}</span>
+            <div className="rounded-lg border border-border bg-canvas px-3 py-2.5 min-h-[40px] overflow-hidden">
+              {role === "header" && (
+                <span className="text-[20px] font-bold leading-tight text-ink block">{text || "Headline text"}</span>
               )}
-              {role === "evidence" && (
-                <span className="text-[13px] leading-snug text-ink">{text || "Body text"}</span>
+              {role === "subheader" && (
+                <span className="text-[16px] font-semibold leading-tight text-ink block">{text || "Subheading text"}</span>
               )}
-              {role === "aside" && (
-                <span className="text-[12px] italic leading-snug text-muted-foreground">{text || "Quote or aside"}</span>
+              {role === "body" && (
+                <span className="text-[13px] leading-snug text-ink block">{text || "Body text"}</span>
+              )}
+              {role === "bullet" && (
+                <span className="text-[12px] leading-snug text-ink block whitespace-pre-line">
+                  {(text || "• Item one\n• Item two").split("\n").map((l, i) => (
+                    <span key={i} className="block before:content-['•_']">{l.replace(/^•\s*/, "")}</span>
+                  ))}
+                </span>
+              )}
+              {role === "stat" && (
+                <span className="text-[28px] font-extrabold leading-none text-ink block">{text || "42%"}</span>
+              )}
+              {role === "quote" && (
+                <span className="text-[12px] italic leading-snug text-muted-foreground block">{text || "Quote or aside"}</span>
               )}
             </div>
           </div>
@@ -138,6 +177,32 @@ export function ContentNodePanel({ node, onClose, onChange, onDelete }: Props) {
               onBlur={() => commitText(text)}
               className="w-full px-2.5 py-2 rounded-lg border border-border bg-canvas text-[13px] text-ink leading-snug outline-none focus:border-[color:var(--accent)] transition-colors resize-none"
             />
+          </div>
+        )}
+
+        {/* Video content */}
+        {node.kind === "video" && (
+          <div className="space-y-3">
+            <div className="space-y-1.5">
+              <span className="text-[12px] text-muted-foreground">URL</span>
+              <input
+                value={url}
+                onChange={(e) => setUrl(e.target.value)}
+                onBlur={() => commitUrl(url)}
+                placeholder="https://www.youtube.com/watch?v=…"
+                className="w-full px-2.5 py-2 rounded-lg border border-border bg-canvas text-[13px] text-ink outline-none focus:border-[color:var(--accent)] transition-colors"
+              />
+            </div>
+            <div className="space-y-1.5">
+              <span className="text-[12px] text-muted-foreground">Caption</span>
+              <input
+                value={caption}
+                onChange={(e) => setCaption(e.target.value)}
+                onBlur={() => commitCaption(caption)}
+                placeholder="Optional caption…"
+                className="w-full px-2.5 py-2 rounded-lg border border-border bg-canvas text-[13px] text-ink outline-none focus:border-[color:var(--accent)] transition-colors"
+              />
+            </div>
           </div>
         )}
 

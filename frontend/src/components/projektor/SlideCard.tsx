@@ -160,19 +160,30 @@ export function SlideCard({
   );
 }
 
-const ROLE_CHIP: Record<TextPayload["role"], string> = {
-  claim:    "H1",
-  evidence: "Body",
-  aside:    "Quote",
+const ROLE_CHIP: Partial<Record<TextPayload["role"], string>> = {
+  header:    "H1",
+  subheader: "H2",
+  body:      "Body",
+  bullet:    "List",
+  stat:      "Stat",
+  quote:     "Quote",
+  // backward compat
+  claim:     "H1",
+  evidence:  "Body",
+  aside:     "Quote",
 };
 
 function contentLabel(cn: ContentNode): string {
   if (cn.kind === "image") return "Image";
+  if (cn.kind === "video") return "Video";
+  if (cn.kind === "data")  return "Chart";
   return ROLE_CHIP[(cn.payload as TextPayload).role] ?? "Text";
 }
 
 function contentPreview(cn: ContentNode): string {
   if (cn.kind === "image") return (cn.payload as { url: string }).url ? "Image" : "Image (empty)";
+  if (cn.kind === "video") return (cn.payload as { url: string }).url || "Video";
+  if (cn.kind === "data")  return "Chart";
   const text = (cn.payload as TextPayload).text;
   return text.length > 44 ? text.slice(0, 44) + "…" : text;
 }

@@ -82,10 +82,17 @@ export type DiagramSpec = z.infer<typeof DiagramSpecSchema>;
 // ---------------------------------------------------------------------------
 
 export const TextPayloadSchema = z.object({
-  role: z.enum(['claim', 'evidence', 'aside']),
+  // New canonical roles (6 types). Old values kept for backward-compat with stored data.
+  role: z.enum(['header', 'subheader', 'body', 'bullet', 'stat', 'quote', 'claim', 'evidence', 'aside']),
   text: z.string(),
 });
 export type TextPayload = z.infer<typeof TextPayloadSchema>;
+
+export const VideoPayloadSchema = z.object({
+  url: z.string(),
+  caption: z.string().optional(),
+});
+export type VideoPayload = z.infer<typeof VideoPayloadSchema>;
 
 export const DataPayloadSchema = z.object({
   chart: ChartSpecSchema,
@@ -108,6 +115,7 @@ const contentNodeBase = {
 export const ContentNodeSchema = z.discriminatedUnion('kind', [
   z.object({ id: z.string(), kind: z.literal('text'),  payload: TextPayloadSchema,  ...contentNodeBase }),
   z.object({ id: z.string(), kind: z.literal('image'), payload: ImagePayloadSchema, ...contentNodeBase }),
+  z.object({ id: z.string(), kind: z.literal('video'), payload: VideoPayloadSchema, ...contentNodeBase }),
   z.object({ id: z.string(), kind: z.literal('data'),  payload: DataPayloadSchema,  ...contentNodeBase }),
 ]);
 export type ContentNode = z.infer<typeof ContentNodeSchema>;
@@ -509,6 +517,19 @@ const MAT_TITLE_ROW_SPAN    = Math.round(GRID_ROWS * 0.13);  // ~731  — compac
 const MAT_CONTENT_ROW_START = Math.round(GRID_ROWS * 0.24);  // ~1350 — content top when title present
 const MAT_CONTENT_ROW_TOTAL = Math.round(GRID_ROWS * 0.68);  // ~3825 — content height when title present
 
+const TEXT_STYLE_MAP: Partial<Record<TextPayload['role'], Partial<TextBlockStyle>>> = {
+  header:    { fontSize: 72, fontWeight: 700, lineHeight: 1.1 },
+  subheader: { fontSize: 48, fontWeight: 600, lineHeight: 1.2 },
+  body:      { fontSize: 32, fontWeight: 400, lineHeight: 1.4 },
+  bullet:    { fontSize: 28, fontWeight: 400, lineHeight: 1.6 },
+  stat:      { fontSize: 96, fontWeight: 800, lineHeight: 1.0 },
+  quote:     { fontSize: 32, fontWeight: 400, fontStyle: 'italic', lineHeight: 1.4 },
+  // backward-compat aliases
+  claim:     { fontSize: 72, fontWeight: 700, lineHeight: 1.1 },
+  evidence:  { fontSize: 32, fontWeight: 400, lineHeight: 1.4 },
+  aside:     { fontSize: 28, fontWeight: 400, fontStyle: 'italic', lineHeight: 1.4 },
+};
+
 function contentNodeToLeaf(cn: ContentNode, placement: GridPlacement): LeafNode {
   if (cn.kind === 'image') {
     return {
@@ -522,12 +543,26 @@ function contentNodeToLeaf(cn: ContentNode, placement: GridPlacement): LeafNode 
       rotation: 0,
     };
   }
+  if (cn.kind === 'video') {
+    // Render as a text label in the slide (full video embed out of scope for hackathon).
+    const vp = cn.payload as VideoPayload;
+    const style: TextBlockStyle = {
+      fontSize: 28, fontWeight: 400, fontStyle: 'italic',
+      textDecoration: 'none', textAlign: 'center',
+      color: 'oklch(0.54 0.105 192)', lineHeight: 1.4,
+    };
+    return {
+      kind: 'leaf',
+      id: makeLeafId(),
+      contentNodeId: cn.id,
+      placement,
+      block: { role: 'text', text: `▶ ${vp.url || 'Video'}`, style },
+      zIndex: 1,
+      opacity: 1,
+      rotation: 0,
+    };
+  }
   const payload = cn.payload as TextPayload;
-  const styleMap: Record<TextPayload['role'], Partial<TextBlockStyle>> = {
-    claim:    { fontSize: 72, fontWeight: 700, lineHeight: 1.1 },
-    evidence: { fontSize: 32, fontWeight: 400, lineHeight: 1.4 },
-    aside:    { fontSize: 28, fontWeight: 400, fontStyle: 'italic', lineHeight: 1.4 },
-  };
   const style: TextBlockStyle = {
     fontSize: 32,
     fontWeight: 400,
@@ -536,7 +571,7 @@ function contentNodeToLeaf(cn: ContentNode, placement: GridPlacement): LeafNode 
     textAlign: 'left',
     color: 'oklch(0.24 0.009 185)',
     lineHeight: 1.3,
-    ...styleMap[payload.role],
+    ...TEXT_STYLE_MAP[payload.role],
   };
   return {
     kind: 'leaf',

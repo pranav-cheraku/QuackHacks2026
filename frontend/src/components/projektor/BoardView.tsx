@@ -14,7 +14,7 @@ import { AddContent } from "./AddContent";
 import { SlideCard } from "./SlideCard";
 import { ContentNodeCard } from "./ContentNodeCard";
 import { ContentNodePanel } from "./ContentNodePanel";
-import type { ContentNode } from "@/lib/ir";
+import type { ContentNode, TextPayload } from "@/lib/ir";
 import {
   INITIAL_NODES,
   INITIAL_EDGES,
@@ -1530,10 +1530,16 @@ export function BoardView({
                 const centerY = (viewportRef.current
                   ? viewportRef.current.clientHeight / 2
                   : 300) / zoom - pan.y / zoom;
+                const TYPE_TO_ROLE: Record<string, TextPayload["role"]> = {
+                  Header: "header", Subheader: "subheader", Body: "body",
+                  List: "bullet", Stat: "stat", Quote: "quote",
+                };
                 const newNode: ContentNode =
                   draft.type === "Image"
                     ? { id, kind: "image", payload: { url: draft.src ?? "", caption: draft.label } }
-                    : { id, kind: "text", payload: { role: "claim", text: draft.label } };
+                    : draft.type === "Video"
+                    ? { id, kind: "video", payload: { url: draft.url ?? "" } }
+                    : { id, kind: "text", payload: { role: TYPE_TO_ROLE[draft.type] ?? "body", text: draft.text ?? draft.label } };
                 onContentPoolChange([
                   ...(contentPool ?? []),
                   { ...newNode, graphPosition: { x: centerX, y: centerY } },

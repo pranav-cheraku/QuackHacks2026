@@ -1,6 +1,6 @@
 import { useEffect, useRef } from "react";
 import { Link } from "lucide-react";
-import type { ContentNode, TextPayload, ImagePayload } from "@/lib/ir";
+import type { ContentNode, TextPayload, ImagePayload, VideoPayload } from "@/lib/ir";
 
 interface Props {
   node: ContentNode;
@@ -14,15 +14,29 @@ interface Props {
 }
 
 const ROLE_LABEL: Record<TextPayload["role"], string> = {
-  claim:    "H1",
-  evidence: "BODY",
-  aside:    "QUOTE",
+  header:    "H1",
+  subheader: "H2",
+  body:      "BODY",
+  bullet:    "LIST",
+  stat:      "STAT",
+  quote:     "QUOTE",
+  // backward compat
+  claim:     "H1",
+  evidence:  "BODY",
+  aside:     "QUOTE",
 };
 
 const ROLE_TEXT_CLASS: Record<TextPayload["role"], string> = {
-  claim:    "text-[15px] font-bold leading-tight text-ink",
-  evidence: "text-[12px] font-normal leading-snug text-ink",
-  aside:    "text-[11px] italic leading-snug text-muted-foreground",
+  header:    "text-[16px] font-bold leading-tight text-ink",
+  subheader: "text-[14px] font-semibold leading-tight text-ink",
+  body:      "text-[12px] font-normal leading-snug text-ink",
+  bullet:    "text-[12px] font-normal leading-snug text-ink",
+  stat:      "text-[20px] font-extrabold leading-none text-ink",
+  quote:     "text-[11px] italic leading-snug text-muted-foreground",
+  // backward compat
+  claim:     "text-[16px] font-bold leading-tight text-ink",
+  evidence:  "text-[12px] font-normal leading-snug text-ink",
+  aside:     "text-[11px] italic leading-snug text-muted-foreground",
 };
 
 export function ContentNodeCard({
@@ -80,6 +94,7 @@ export function ContentNodeCard({
 
   const textPayload = node.kind === "text" ? (node.payload as TextPayload) : null;
   const imagePayload = node.kind === "image" ? (node.payload as ImagePayload) : null;
+  const videoPayload = node.kind === "video" ? (node.payload as VideoPayload) : null;
 
   return (
     <div
@@ -115,7 +130,7 @@ export function ContentNodeCard({
             style={{ background: "var(--accent)" }}
           />
           <span className="font-mono text-[9px] uppercase tracking-wider text-muted-foreground">
-            {textPayload ? ROLE_LABEL[textPayload.role] : node.kind}
+            {textPayload ? ROLE_LABEL[textPayload.role] : videoPayload ? "VIDEO" : node.kind}
           </span>
         </div>
 
@@ -124,6 +139,23 @@ export function ContentNodeCard({
           <p className={`px-3 pb-3 ${ROLE_TEXT_CLASS[textPayload.role]}`}>
             {textPayload.text}
           </p>
+        )}
+
+        {/* Video content */}
+        {videoPayload && (
+          <div className="px-3 pb-3">
+            <div className="w-full h-14 rounded-lg bg-canvas border border-border flex flex-col items-center justify-center gap-1">
+              <span className="text-[16px]">▶</span>
+              <span className="font-mono text-[9px] text-muted-foreground truncate max-w-[180px]">
+                {videoPayload.url || "No URL"}
+              </span>
+            </div>
+            {videoPayload.caption && (
+              <span className="block mt-1 text-[10px] text-muted-foreground truncate">
+                {videoPayload.caption}
+              </span>
+            )}
+          </div>
         )}
 
         {/* Image content */}

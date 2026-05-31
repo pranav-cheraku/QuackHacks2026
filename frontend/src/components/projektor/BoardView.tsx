@@ -633,7 +633,7 @@ export function BoardView({ zoom, setZoom, onOpenEditor }: Props) {
                 {n.ghost ? (
                   <GhostCard
                     node={n}
-                    selected={selected === n.id}
+                    selected={selectedIds.has(n.id)}
                     dimmed={isNodeDimmed(n)}
                     onSelect={() => selectNode(n.id)}
                     onMove={onMove}
@@ -646,9 +646,9 @@ export function BoardView({ zoom, setZoom, onOpenEditor }: Props) {
                 ) : (
                   <SlideCard
                     node={n}
-                    selected={selected === n.id}
+                    selected={selectedIds.has(n.id)}
                     dimmed={isNodeDimmed(n)}
-                    onSelect={() => selectNode(n.id)}
+                    onSelect={(shiftKey) => selectNode(n.id, shiftKey)}
                     onOpenEditor={() => onOpenEditor(n.id)}
                     onMove={onMove}
                     zoom={zoom}
@@ -676,6 +676,19 @@ export function BoardView({ zoom, setZoom, onOpenEditor }: Props) {
               </div>
             );
           })}
+
+          {/* Marquee selection box (canvas space) */}
+          {selectionBox && (
+            <div
+              className="absolute pointer-events-none border border-(--accent) bg-accent-soft opacity-60"
+              style={{
+                left: Math.min(selectionBox.x1, selectionBox.x2),
+                top: Math.min(selectionBox.y1, selectionBox.y2),
+                width: Math.abs(selectionBox.x2 - selectionBox.x1),
+                height: Math.abs(selectionBox.y2 - selectionBox.y1),
+              }}
+            />
+          )}
         </div>
 
         {/* Left tool rail */}

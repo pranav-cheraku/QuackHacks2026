@@ -6,16 +6,16 @@ import { EditorView } from "@/components/projektor/EditorView";
 import { LandingPage } from "@/components/projektor/LandingPage";
 import { INITIAL_NODES, INITIAL_EDGES, type SlideNode, type Edge } from "@/lib/projektor-data";
 import type { ContentNode } from "@/lib/ir";
-import { createDeck, getDeck } from "@/lib/deckStore";
-import { loadDeck, saveDeck } from "@/lib/firestore-slides";
+import { createDeck } from "@/lib/deckStore";
+import { loadDeck, saveDeck, createProject } from "@/lib/firestore-slides";
 import type { HydrateResult } from "@/lib/chunker";
 import { useAuth } from "@/context/AuthContext";
 import { DEFAULT_ZOOM, ZOOM_STEP, clampZoom, zoomBy } from "@/lib/viewport";
 
-// ── Route search params: ?deckId=xxx loads a specific deck from the session store
+// ── Route search params: ?projectId=xxx loads a project from Firestore
 export const Route = createFileRoute("/")({
   validateSearch: (search: Record<string, unknown>) => ({
-    deckId: typeof search.deckId === "string" ? search.deckId : undefined,
+    projectId: typeof search.projectId === "string" ? search.projectId : undefined,
   }),
   head: () => ({
     meta: [
@@ -31,25 +31,25 @@ export const Route = createFileRoute("/")({
 });
 
 function Projektor() {
-  const { deckId } = Route.useSearch();
+  const { projectId } = Route.useSearch();
   const { currentUser, loading } = useAuth();
   const navigate = useNavigate();
 
-  const savedDeck = deckId ? getDeck(deckId) : undefined;
-
   const [phase, setPhase] = useState<"landing" | "app">(
-    savedDeck ? "app" : "landing",
+    projectId ? "app" : "landing",
   );
-  const [deck, setDeck] = useState<SlideNode[]>(savedDeck?.nodes ?? INITIAL_NODES);
-  const [deckEdges, setDeckEdges] = useState<Edge[]>(savedDeck?.edges ?? INITIAL_EDGES);
-  const [mode, setMode] = useState<"board" | "editor">(savedDeck ? "board" : "editor");
+  const [deck, setDeck] = useState<SlideNode[]>(INITIAL_NODES);
+  const [deckEdges, setDeckEdges] = useState<Edge[]>(INITIAL_EDGES);
+  const [mode, setMode] = useState<"board" | "editor">("editor");
   const [zoom, setZoomState] = useState(DEFAULT_ZOOM);
   const [isGridVisible, setIsGridVisible] = useState(false);
   const [editorStart, setEditorStart] = useState<string | null>(null);
-  // True once deck is hydrated from Firestore (or session store). EditorView uses
-  // this signal to re-init its history from the loaded deck (fires at most once).
-  const [deckLoaded, setDeckLoaded] = useState(!!savedDeck);
+  // True once deck is hydrated from Firestore. EditorView uses this signal to
+  // re-init its history from the loaded deck (fires at most once per project).
+  const [deckLoaded, setDeckLoaded] = useState(false);
   const [contentPool, setContentPool] = useState<ContentNode[]>([]);
+  // Tracks the active project ID so saves go to the right Firestore document.
+  const [currentProjectId, setCurrentProjectId] = useState<string | null>(projectId ?? null);
   const saveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   useEffect(() => {
@@ -58,44 +58,39 @@ function Projektor() {
     }
   }, [loading, currentUser, navigate]);
 
-  // Pre-load the user's persisted deck from Firestore on first auth so that
-  // EditorView and BoardView can initialize from it without an extra round-trip.
-  // IMPORTANT: does NOT change `phase` — the landing page is always shown for
-  // a bare `/` navigation (no ?deckId=). The user explicitly generates to enter
-  // the board. Changing phase here would bypass the landing page for returning
-  // users and break "create a new project".
+  // Load the project from Firestore when a projectId is present in the URL.
+  // Runs whenever projectId changes so navigating between projects works correctly.
   useEffect(() => {
-    if (!currentUser || savedDeck) return;
-    loadDeck(currentUser.uid)
+    if (!currentUser || !projectId) return;
+    setDeckLoaded(false);
+    loadDeck(currentUser.uid, projectId)
       .then((saved) => {
         if (saved && saved.nodes.length > 0) {
           setDeck(saved.nodes);
           setDeckEdges(saved.edges);
           setContentPool(saved.contentPool);
-          // phase stays "landing" — user must generate to enter the board.
+          setMode("board");
+          setPhase("app");
         }
       })
-      .catch((err) => console.error("[index] Failed to load deck:", err))
+      .catch((err) => console.error("[index] Failed to load project:", err))
       .finally(() => setDeckLoaded(true));
-  // Run once per auth session — savedDeck is captured in closure at mount time.
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [currentUser]);
+  }, [currentUser, projectId]);
 
-  // Auto-save the shared deck to Firestore whenever EditorView changes it.
-  // BoardView has its own save for graph-structure changes; this covers
-  // slide-layout writes (root, candidates, activeDesignId) from EditorView.
-  // Only runs in "app" phase — not during the pre-load on the landing page.
+  // Auto-save the deck to Firestore whenever EditorView changes it (debounced).
+  // Only runs in "app" phase with a known project.
   useEffect(() => {
-    if (!currentUser || !deckLoaded || phase !== "app") return;
+    if (!currentUser || !deckLoaded || phase !== "app" || !currentProjectId) return;
     if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
     saveTimerRef.current = setTimeout(() => {
-      saveDeck(currentUser.uid, deck, deckEdges, contentPool).catch((err) =>
+      saveDeck(currentUser.uid, currentProjectId, deck, deckEdges, contentPool).catch((err) =>
         console.error("[index] Failed to save deck:", err),
       );
     }, 1500);
     return () => { if (saveTimerRef.current) clearTimeout(saveTimerRef.current); };
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [deck, deckEdges, contentPool, currentUser, deckLoaded, phase]);
+  }, [deck, deckEdges, contentPool, currentUser, deckLoaded, phase, currentProjectId]);
 
   // Callback for EditorView: receives slide-layout updates and merges them into
   // the shared deck. Also picked up by BoardView via externalSlides so graph
@@ -125,17 +120,20 @@ function Projektor() {
   const toggleGrid = () => setIsGridVisible((v) => !v);
 
   // GRAPH VIEW ENTRY POINT: generate output lands on the graph (board mode).
-  // Buckets populate the graph as structural argument nodes; each call creates
-  // a new deck entry in the session store (multi-deck support).
-  const handleGenerate = ({ nodes, edges, contentPool: pool }: HydrateResult) => {
-    createDeck(nodes, edges);
+  // Creates a new Firestore project with the initial deck, then navigates to it.
+  const handleGenerate = async ({ nodes, edges, contentPool: pool }: HydrateResult) => {
+    createDeck(nodes, edges); // keep session store in sync for any session-only consumers
+    const name = nodes[0]?.title ?? "Untitled";
+    const newProjectId = await createProject(currentUser.uid, name, nodes, edges, pool);
+    setCurrentProjectId(newProjectId);
     setDeck(nodes);
     setDeckEdges(edges);
     setContentPool(pool);
-    setDeckLoaded(true); // signal EditorView to re-init from the freshly generated deck
+    setDeckLoaded(true);
     setEditorStart(null);
     setMode("board");
     setPhase("app");
+    navigate({ to: "/", search: { projectId: newProjectId } });
   };
 
   if (phase === "landing") {
@@ -161,6 +159,7 @@ function Projektor() {
           onContentPoolChange={setContentPool}
           zoom={zoom}
           setZoom={setZoom}
+          projectId={currentProjectId ?? undefined}
           onOpenEditor={(id) => {
             setEditorStart(id);
             setMode("editor");

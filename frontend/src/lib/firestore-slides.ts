@@ -3,113 +3,78 @@ import {
   getDocs, getDoc, setDoc, deleteDoc,
 } from 'firebase/firestore';
 import { db } from './firebase';
-import { LayoutNodeSchema } from './ir';
-import type { LayoutNode } from './ir';
 import type { SlideNode, Edge } from './projektor-data';
 import type { ContentNode } from './ir';
-import { SLIDE_CANDIDATES } from './slide-candidates';
-
-const COL = 'slides';
 
 // Firestore rejects `undefined` — strip it before every write.
 function serialize(value: unknown): unknown {
   return JSON.parse(JSON.stringify(value));
 }
 
-// Load all slides from Firestore, sorted by index.
-// Returns null if the collection is empty (first run — caller should seed from defaults).
-export async function loadSlides(): Promise<SlideNode[] | null> {
-  const snap = await getDocs(collection(db, COL));
-  if (snap.empty) return null;
+// ── Project schema ────────────────────────────────────────────────────────────
+// Each user's presentations live at users/{uid}/projects/{projectId}.
+// This replaces the old flat `slides` collection and the single `decks/current` doc.
 
-  const slides = snap.docs
-    .map((d) => {
-      const data = d.data();
-      const parsed = LayoutNodeSchema.safeParse(data.root);
-      if (!parsed.success) {
-        console.error(`[firestore] Failed to parse slide ${d.id}:`, parsed.error);
-        return null;
-      }
-      const slide: SlideNode = {
-        id:            d.id,
-        index:         data.index   ?? 0,
-        title:         data.title   ?? 'Untitled',
-        x:             data.x       ?? 0,
-        y:             data.y       ?? 0,
-        rotation:      data.rotation ?? 0,
-        state:         data.state   ?? 'rendered',
-        components:    data.components ?? [],
-        thumb:         data.thumb   ?? 'title',
-        width:         data.width,
-        height:        data.height,
-        root:          parsed.data,
-        kind:          (data.kind as import('./projektor-data').SceneKind) ?? 'title',
-        status:        (data.status as import('./projektor-data').SceneStatus) ?? 'draft',
-        // Candidates are static design options — not persisted, merged in on load.
-        candidates:    SLIDE_CANDIDATES[d.id] ?? [],
-        activeDesignId: SLIDE_CANDIDATES[d.id]?.[0]?.id ?? null,
-      };
-      return slide;
-    })
-    .filter((s): s is SlideNode => s !== null)
-    .sort((a, b) => a.index - b.index);
-
-  return slides.length > 0 ? slides : null;
+export interface ProjectMeta {
+  id: string;
+  name: string;
+  createdAt: number;
+  updatedAt: number;
 }
 
-// Write a single slide's full state to Firestore.
-// Only persists fields that belong in the DB — candidates are static and excluded.
-export async function saveSlide(slide: SlideNode): Promise<void> {
-  await setDoc(doc(db, COL, slide.id), serialize({
-    root:       slide.root,
-    index:      slide.index,
-    title:      slide.title,
-    state:      slide.state,
-    components: slide.components,
-    thumb:      slide.thumb,
-    x:          slide.x,
-    y:          slide.y,
-    rotation:   slide.rotation,
-    width:      slide.width,
-    height:     slide.height,
-  }));
+// Create a new project document and return its generated ID.
+// Optionally seeds the project with an initial deck (used right after generation).
+export async function createProject(
+  uid: string,
+  name: string,
+  nodes: SlideNode[] = [],
+  edges: Edge[] = [],
+  contentPool: ContentNode[] = [],
+): Promise<string> {
+  const projectId = `proj-${Date.now()}`;
+  await setDoc(
+    doc(db, 'users', uid, 'projects', projectId),
+    serialize({ name, nodes, edges, contentPool, createdAt: Date.now(), updatedAt: Date.now() }),
+  );
+  return projectId;
 }
 
-// Seed Firestore with an initial set of slides (first run only).
-export async function seedSlides(slides: SlideNode[]): Promise<void> {
-  await Promise.all(slides.map(saveSlide));
+// List all projects for a user, sorted by most recently updated.
+export async function listProjects(uid: string): Promise<ProjectMeta[]> {
+  const snap = await getDocs(collection(db, 'users', uid, 'projects'));
+  return snap.docs
+    .map((d) => ({
+      id: d.id,
+      name: (d.data().name as string) ?? 'Untitled',
+      createdAt: (d.data().createdAt as number) ?? 0,
+      updatedAt: (d.data().updatedAt as number) ?? 0,
+    }))
+    .sort((a, b) => b.updatedAt - a.updatedAt);
 }
 
-// Remove a slide document from Firestore.
-export async function deleteSlideDoc(slideId: string): Promise<void> {
-  await deleteDoc(doc(db, COL, slideId));
-}
-
-// ── User-scoped deck persistence ──────────────────────────────────────────────
-// Persists the entire deck (nodes + edges) as a single Firestore document at
-// users/{uid}/decks/current. Both Graph View and Slide View project this
-// document — it is the single source of truth for the deck.
-
-// Save the full deck for the authenticated user.
+// Save (or update) deck data within a project. Uses merge so `name`/`createdAt` survive.
 export async function saveDeck(
   uid: string,
+  projectId: string,
   nodes: SlideNode[],
   edges: Edge[],
   contentPool: ContentNode[] = [],
 ): Promise<void> {
   await setDoc(
-    doc(db, 'users', uid, 'decks', 'current'),
-    serialize({ nodes, edges, contentPool, updatedAt: Date.now() }),
+    doc(db, 'users', uid, 'projects', projectId),
+    serialize({ nodes, edges, contentPool, updatedAt: Date.now() }) as Record<string, unknown>,
+    { merge: true },
   );
 }
 
-// Load the user's saved deck. Returns null on first run (no document yet).
-export async function loadDeck(uid: string): Promise<{
+// Load a specific project's deck. Returns null if the project doesn't exist yet.
+export async function loadDeck(uid: string, projectId: string): Promise<{
   nodes: SlideNode[];
   edges: Edge[];
   contentPool: ContentNode[];
+  name?: string;
 } | null> {
-  const snap = await getDoc(doc(db, 'users', uid, 'decks', 'current'));
+  const snap = await getDoc(doc(db, 'users', uid, 'projects', projectId));
   if (!snap.exists()) return null;
   const data = snap.data();
   if (!Array.isArray(data.nodes) || data.nodes.length === 0) return null;
@@ -117,5 +82,11 @@ export async function loadDeck(uid: string): Promise<{
     nodes: data.nodes as SlideNode[],
     edges: Array.isArray(data.edges) ? (data.edges as Edge[]) : [],
     contentPool: Array.isArray(data.contentPool) ? (data.contentPool as ContentNode[]) : [],
+    name: data.name as string | undefined,
   };
+}
+
+// Delete a project and all its data.
+export async function deleteProject(uid: string, projectId: string): Promise<void> {
+  await deleteDoc(doc(db, 'users', uid, 'projects', projectId));
 }

@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { loadSlides, loadDeck, saveDeck } from "@/lib/firestore-slides";
+import { loadDeck, saveDeck } from "@/lib/firestore-slides";
 import { useAuth } from "@/context/AuthContext";
 import { expandNode } from "@/lib/expandApi";
 import { GraphMapPanel } from "./GraphMapPanel";
@@ -47,6 +47,8 @@ interface Props {
   onNodesChange?: (nodes: SlideNode[], edges: Edge[]) => void;
   contentPool?: ContentNode[];
   onContentPoolChange?: (pool: ContentNode[]) => void;
+  // Firestore project ID — required for saving. If absent, saves are skipped.
+  projectId?: string;
 }
 
 // Placeholder chosen spine — real pick logic lands with the branch model.
@@ -195,6 +197,7 @@ export function BoardView({
   onNodesChange,
   contentPool,
   onContentPoolChange,
+  projectId,
 }: Props) {
   const [nodes, setNodes] = useState<SlideNode[]>(
     initialNodes ?? INITIAL_NODES,
@@ -277,31 +280,21 @@ export function BoardView({
     });
   }, [externalSlides]);
 
-  // Load deck from Firestore on mount. Only runs for the default board (no custom
-  // deck passed via props) — generated decks must not be overwritten on load.
-  // Falls back to the legacy per-slide loadSlides() if no deck document exists yet.
-  // frameNodes auto-fits so every node including Generate-next buttons is visible.
+  // Load deck from Firestore on mount. Only runs when no custom initialNodes are
+  // passed (i.e. the default board) and a projectId is known.
   useEffect(() => {
-    if (!currentUser || initialNodes !== INITIAL_NODES) return;
-    loadDeck(currentUser.uid)
+    if (!currentUser || !projectId || initialNodes !== INITIAL_NODES) return;
+    loadDeck(currentUser.uid, projectId)
       .then((saved) => {
         if (saved && saved.nodes.length > 0) {
           setNodes(saved.nodes);
           setEdges(saved.edges);
           setTimeout(() => frameNodes(saved.nodes), 0);
-        } else {
-          // Legacy fallback: individual slide documents (pre-deck-persistence era)
-          return loadSlides().then((remote) => {
-            if (remote && remote.length > 0) {
-              setNodes(remote);
-              setTimeout(() => frameNodes(remote), 0);
-            }
-          });
         }
       })
       .catch((err) => console.error("[BoardView] Failed to load deck:", err));
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [currentUser]);
+  }, [currentUser, projectId]);
 
   // Auto-save the deck to Firestore whenever nodes or edges change (debounced).
   // Scoped to the authenticated user — both views project this same document.
@@ -309,11 +302,11 @@ export function BoardView({
   // Also notifies index.tsx immediately (non-debounced) so EditorView gets freshest
   // text content (body, eyebrow, title) for slide-design candidate generation.
   useEffect(() => {
-    if (!currentUser) return;
+    if (!currentUser || !projectId) return;
     onNodesChangeRef.current?.(nodes, edges);
     if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
     saveTimerRef.current = setTimeout(() => {
-      saveDeck(currentUser.uid, nodes, edges).catch((err) =>
+      saveDeck(currentUser.uid, projectId, nodes, edges).catch((err) =>
         console.error("[BoardView] Failed to save deck:", err),
       );
     }, 1500);
@@ -321,7 +314,7 @@ export function BoardView({
       if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [nodes, edges, currentUser]);
+  }, [nodes, edges, currentUser, projectId]);
 
   const findNode = (id: string) => nodes.find((n) => n.id === id)!;
 

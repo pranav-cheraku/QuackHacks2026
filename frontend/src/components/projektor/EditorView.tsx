@@ -18,6 +18,7 @@ import { gridToCSS, GRID_COLS, GRID_ROWS, snap, SNAP_STEP } from "@/lib/grid";
 import type { GridPlacement } from "@/lib/grid";
 import { SLIDE_ELEMENTS } from "@/lib/initial-slides";
 import { SLIDE_CANDIDATES } from "@/lib/slide-candidates";
+import { ZOOM_STEP, zoomBy } from "@/lib/viewport";
 
 // ── Module-level helpers / constants ─────────────────────────────────────────
 function toHex(c?: string): string {
@@ -67,12 +68,44 @@ function historyReducer(state: History, action: HistoryAction): History {
   }
 }
 
-interface Props { startNodeId: string | null; }
+interface Props {
+  startNodeId: string | null;
+  zoom: number;
+  setZoom: (zoom: number) => void;
+  isGridVisible: boolean;
+  toggleGrid: () => void;
+}
 type RightTab = "agent" | "design" | "arrange";
 type HandlePos = "n" | "ne" | "e" | "se" | "s" | "sw" | "w" | "nw";
 
+function isTextEditingTarget(target: EventTarget | null): boolean {
+  if (!(target instanceof HTMLElement)) return false;
+  const tag = target.tagName;
+  return (
+    tag === "INPUT" ||
+    tag === "TEXTAREA" ||
+    tag === "SELECT" ||
+    target.isContentEditable ||
+    target.closest("[contenteditable='true']") !== null
+  );
+}
+
+function reindexSlides(slides: SlideNode[]): SlideNode[] {
+  return slides.map((slide, index) => ({ ...slide, index: index + 1 }));
+}
+
+function makeSceneId(): string {
+  return `n-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+}
+
 // ─── EditorView ───────────────────────────────────────────────────────────────
-export function EditorView({ startNodeId }: Props) {
+export function EditorView({
+  startNodeId,
+  zoom,
+  setZoom,
+  isGridVisible,
+  toggleGrid,
+}: Props) {
   const [{ past, present: slides, future }, dispatch] = useReducer(
     historyReducer,
     null,
@@ -98,12 +131,23 @@ export function EditorView({ startNodeId }: Props) {
   const [activeId, setActiveId] = useState(startNodeId ?? "n1");
   const [selectedElId, setSelectedElId] = useState<string | null>(null);
   const [editingElId, setEditingElId] = useState<string | null>(null);
+  const [railSelectionActive, setRailSelectionActive] = useState(true);
   const [rightTab, setRightTab] = useState<RightTab>("agent");
-  const [showGrid, setShowGrid] = useState(false);
   const slideRef = useRef<HTMLDivElement>(null);
+  const lastStartNodeIdRef = useRef<string | null>(startNodeId);
 
   const activeSlide = slides.find((s) => s.id === activeId) ?? slides[0];
   const selectedEl = activeSlide?.elements.find((e) => e.id === selectedElId) ?? null;
+
+  useEffect(() => {
+    if (startNodeId === lastStartNodeIdRef.current) return;
+    lastStartNodeIdRef.current = startNodeId;
+    if (!startNodeId || !slides.some((s) => s.id === startNodeId)) return;
+    setActiveId(startNodeId);
+    setSelectedElId(null);
+    setEditingElId(null);
+    setRailSelectionActive(true);
+  }, [startNodeId, slides]);
 
   // ── Helpers ──────────────────────────────────────────────────────────────
   const updateSlide = useCallback(
@@ -128,6 +172,7 @@ export function EditorView({ startNodeId }: Props) {
     updateSlide(activeId, (s) => ({ ...s, elements: [...s.elements, el] }));
     setSelectedElId(el.id);
     setEditingElId(null);
+    setRailSelectionActive(false);
   }, [activeId, updateSlide]);
 
   const deleteEl = useCallback(
@@ -157,13 +202,14 @@ export function EditorView({ startNodeId }: Props) {
       };
       updateSlide(activeId, (s) => ({ ...s, elements: [...s.elements, copy] }));
       setSelectedElId(copy.id);
+      setRailSelectionActive(false);
     },
     [activeId, activeSlide, updateSlide]
   );
 
   const addSlide = useCallback(() => {
     // Stable unique ID — the graph keys nodes on this; never reassign after creation.
-    const id = `n-${Date.now()}`;
+    const id = makeSceneId();
     // GRAPH SYNC: adding a slide = adding a node. The graph reads from the same slides
     // state and will display it as a new node without any extra wiring.
     dispatch({
@@ -186,21 +232,32 @@ export function EditorView({ startNodeId }: Props) {
     });
     setActiveId(id);
     setSelectedElId(null);
+    setEditingElId(null);
+    setRailSelectionActive(true);
   }, []);
 
   const deleteSlide = useCallback((id: string) => {
     if (slides.length <= 1) return; // never remove the last scene
     const idx = slides.findIndex((s) => s.id === id);
+    if (idx === -1) return;
     const sibling = slides[idx + 1] ?? slides[idx - 1];
     // Navigate before the state update so activeId is never left pointing at a removed scene
     setActiveId(sibling.id);
     setSelectedElId(null);
     setEditingElId(null);
+    setRailSelectionActive(true);
     // GRAPH SYNC: deleting a slide = removing a node. Prune edges referencing this scene
     // now so the graph never encounters dangling connectors when it reads this state.
-    dispatch({ type: "commit", updater: (prev) => prev.filter((s) => s.id !== id) });
+    dispatch({ type: "commit", updater: (prev) => reindexSlides(prev.filter((s) => s.id !== id)) });
     setEdges((prev) => prev.filter((e) => e.from !== id && e.to !== id));
   }, [slides]);
+
+  const selectSlideFromRail = useCallback((id: string) => {
+    setActiveId(id);
+    setSelectedElId(null);
+    setEditingElId(null);
+    setRailSelectionActive(true);
+  }, []);
 
   // ── Keyboard shortcuts ────────────────────────────────────────────────────
   useEffect(() => {
@@ -211,11 +268,19 @@ export function EditorView({ startNodeId }: Props) {
       if ((e.metaKey || e.ctrlKey) && (e.key === "y" || (e.key === "z" && e.shiftKey))) {
         e.preventDefault(); redo(); return;
       }
+      if (isTextEditingTarget(e.target)) return;
       if (editingElId) return;
+      if ((e.key === "Delete" || e.key === "Backspace") && railSelectionActive && !selectedElId) {
+        if (e.repeat) return;
+        e.preventDefault();
+        deleteSlide(activeId);
+        return;
+      }
       if (!selectedElId) return;
-      const tag = (e.target as HTMLElement).tagName;
-      if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT") return;
-      if (e.key === "Delete" || e.key === "Backspace") deleteEl(selectedElId);
+      if (e.key === "Delete" || e.key === "Backspace") {
+        e.preventDefault();
+        deleteEl(selectedElId);
+      }
       if ((e.metaKey || e.ctrlKey) && e.key === "d") {
         e.preventDefault();
         duplicateEl(selectedElId);
@@ -224,7 +289,7 @@ export function EditorView({ startNodeId }: Props) {
     };
     window.addEventListener("keydown", handler);
     return () => window.removeEventListener("keydown", handler);
-  }, [selectedElId, editingElId, deleteEl, duplicateEl, undo, redo]);
+  }, [activeId, selectedElId, editingElId, railSelectionActive, deleteSlide, deleteEl, duplicateEl, undo, redo]);
 
   // ── Paste image from clipboard ────────────────────────────────────────────
   useEffect(() => {
@@ -369,10 +434,14 @@ export function EditorView({ startNodeId }: Props) {
         )}
         <div className="ml-auto">
           <button
-            title={showGrid ? "Hide grid" : "Show grid"}
-            onClick={() => setShowGrid((v) => !v)}
-            className={`w-7 h-7 flex items-center justify-center rounded transition-all ${showGrid ? "text-white" : "text-muted-foreground hover:text-ink"}`}
-            style={showGrid ? { background: "var(--accent-teal)" } : undefined}
+            title={isGridVisible ? "Hide grid" : "Show grid"}
+            onClick={toggleGrid}
+            className={`w-7 h-7 flex items-center justify-center rounded transition-all ${
+              isGridVisible
+                ? "bg-[color:var(--accent-teal)] text-white"
+                : "text-muted-foreground hover:text-ink hover:bg-canvas/60"
+            }`}
+            aria-pressed={isGridVisible}
           >
             <Grid3x3 size={13} />
           </button>
@@ -390,49 +459,77 @@ export function EditorView({ startNodeId }: Props) {
                GRAPH SYNC: the linear order shown here is one path through the graph (the chosen path).
                Reordering here = choosing a different linearization, not restructuring the graph itself. */}
           <div className="flex-1 overflow-y-auto py-2">
-            {slides.map((s) => (
-              <div
-                key={s.id}
-                role="button"
-                tabIndex={0}
-                onClick={() => { setActiveId(s.id); setSelectedElId(null); setEditingElId(null); }}
-                onKeyDown={(e) => e.key === "Enter" && setActiveId(s.id)}
-                className={`group relative w-full px-3 py-1.5 flex gap-2.5 items-start text-left transition-all cursor-pointer ${
-                  activeId === s.id ? "bg-[color:var(--accent-soft)]" : "hover:bg-canvas/50"
-                }`}
-              >
-                <span className="text-[10px] font-mono text-muted-foreground pt-1 w-4 shrink-0 text-right">{s.index}</span>
+            {slides.map((s) => {
+              const isViewed = activeId === s.id;
+              const isDeleteSelected = isViewed && railSelectionActive && !selectedElId && !editingElId;
+
+              return (
                 <div
-                  className={`flex-1 rounded border overflow-hidden bg-white transition-all ${
-                    activeId === s.id
-                      ? "border-[color:var(--accent-teal)] shadow-[0_0_0_2px_var(--accent-soft)]"
-                      : "border-border"
+                  key={s.id}
+                  role="button"
+                  aria-current={isViewed ? "true" : undefined}
+                  aria-selected={isDeleteSelected}
+                  tabIndex={0}
+                  onClick={() => selectSlideFromRail(s.id)}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter" || e.key === " ") {
+                      e.preventDefault();
+                      selectSlideFromRail(s.id);
+                    }
+                  }}
+                  className={`group relative w-full px-3 py-1.5 flex gap-2.5 items-start text-left transition-all cursor-pointer ${
+                    isDeleteSelected
+                      ? "bg-canvas/80"
+                      : isViewed
+                      ? "bg-canvas/60"
+                      : "hover:bg-canvas/50"
                   }`}
-                  style={{ aspectRatio: "16/9" }}
                 >
-                  <SlideThumb node={s} />
-                </div>
-                {/* Delete — hidden until hover; disabled when only 1 slide remains */}
-                {slides.length > 1 && (
-                  <button
-                    onClick={(e) => { e.stopPropagation(); deleteSlide(s.id); }}
-                    title="Delete slide"
-                    className="absolute top-1 right-1 w-5 h-5 flex items-center justify-center rounded opacity-0 group-hover:opacity-100 transition-opacity text-muted-foreground hover:text-red-400 hover:bg-canvas"
+                  <span
+                    className={`text-[10px] font-mono pt-1 w-4 shrink-0 text-right ${
+                      isDeleteSelected ? "text-ink font-bold" : "text-muted-foreground"
+                    }`}
                   >
-                    <Trash2 size={10} />
-                  </button>
-                )}
-              </div>
-            ))}
+                    {s.index}
+                  </span>
+                  <div
+                    className={`flex-1 rounded border overflow-hidden bg-white transition-all ${
+                      isDeleteSelected
+                        ? "border-ink shadow-[0_0_0_2px_oklch(0.54_0.105_192_/_0.35)]"
+                        : isViewed
+                        ? "border-[color:var(--accent-teal)]"
+                        : "border-border"
+                    }`}
+                    style={{ aspectRatio: "16/9" }}
+                  >
+                    <SlideThumb node={s} />
+                  </div>
+                </div>
+              );
+            })}
           </div>
           {/* GRAPH SYNC: scene edits (content/layout) mutate the shared slides state so both
                views always project the same source of truth — no separate copy per view. */}
-          <div className="border-t border-border p-2.5">
+          <div className="border-t border-border p-2.5 space-y-2">
             <button
               onClick={addSlide}
               className="w-full py-1.5 flex items-center justify-center gap-1.5 text-[11px] font-medium text-muted-foreground hover:text-ink border border-dashed border-border rounded hover:border-[color:var(--accent-teal)] hover:bg-canvas/40 transition-all"
             >
               <Plus size={12} /> Add slide
+            </button>
+            <button
+              onClick={() => deleteSlide(activeId)}
+              disabled={slides.length <= 1 || !railSelectionActive || !!selectedElId || !!editingElId}
+              className="w-full py-1.5 flex items-center justify-center gap-1.5 text-[11px] font-medium text-muted-foreground hover:text-red-400 disabled:opacity-40 disabled:hover:text-muted-foreground border border-border rounded hover:bg-canvas/40 transition-all"
+              title={
+                slides.length <= 1
+                  ? "Cannot delete the last slide"
+                  : railSelectionActive && !selectedElId && !editingElId
+                  ? "Delete selected slide"
+                  : "Select a slide in the rail to delete it"
+              }
+            >
+              <Trash2 size={12} /> Delete selected
             </button>
           </div>
         </aside>
@@ -440,35 +537,46 @@ export function EditorView({ startNodeId }: Props) {
         {/* ── Canvas ── */}
         <div
           className="flex-1 flex items-center justify-center bg-canvas/60 overflow-auto p-8 min-w-0"
-          onClick={() => { setSelectedElId(null); setEditingElId(null); }}
+          onClick={() => { setSelectedElId(null); setEditingElId(null); setRailSelectionActive(false); }}
+          onWheel={(e) => {
+            if (!e.ctrlKey && !e.metaKey) return;
+            e.preventDefault();
+            setZoom(zoomBy(zoom, e.deltaY < 0 ? ZOOM_STEP : -ZOOM_STEP));
+          }}
         >
-          <div
-            ref={slideRef}
-            className="bg-white rounded-sm shadow-[0_8px_40px_-12px_oklch(0.3_0.01_175/0.3)] relative overflow-hidden shrink-0"
-            style={{ width: 928, height: 522 }}
-            onClick={(e) => e.stopPropagation()}
-            onDragOver={(e) => { e.preventDefault(); e.stopPropagation(); }}
-            onDrop={(e) => {
-              e.preventDefault();
-              e.stopPropagation();
-              const file = Array.from(e.dataTransfer.files).find((f) => f.type.startsWith("image/")) ?? null;
-              if (!file) return;
-              const src = URL.createObjectURL(file);
-              if (selectedEl?.type === "image") {
-                updateEl(selectedEl.id, (el) => ({ ...el, src }));
-              } else {
-                const colSpan = 4000;
-                const rowSpan = 2250;
-                const rect = slideRef.current!.getBoundingClientRect();
-                const col = snap(Math.max(0, Math.min(GRID_COLS - colSpan,
-                  Math.round(((e.clientX - rect.left) / rect.width) * GRID_COLS - colSpan / 2))));
-                const row = snap(Math.max(0, Math.min(GRID_ROWS - rowSpan,
-                  Math.round(((e.clientY - rect.top) / rect.height) * GRID_ROWS - rowSpan / 2))));
-                addEl(makeImageElement({ src, placement: { col, row, colSpan, rowSpan } }));
-              }
-            }}
-          >
-            <GridOverlay visible={showGrid} />
+          <div className="relative shrink-0" style={{ width: 928 * zoom, height: 522 * zoom }}>
+            <div
+              ref={slideRef}
+              className="bg-white rounded-sm shadow-[0_8px_40px_-12px_oklch(0.3_0.01_175/0.3)] relative overflow-hidden"
+              style={{
+                width: 928,
+                height: 522,
+                transform: `scale(${zoom})`,
+                transformOrigin: "top left",
+              }}
+              onClick={(e) => e.stopPropagation()}
+              onDragOver={(e) => { e.preventDefault(); e.stopPropagation(); }}
+              onDrop={(e) => {
+                e.preventDefault();
+                e.stopPropagation();
+                const file = Array.from(e.dataTransfer.files).find((f) => f.type.startsWith("image/")) ?? null;
+                if (!file) return;
+                const src = URL.createObjectURL(file);
+                if (selectedEl?.type === "image") {
+                  updateEl(selectedEl.id, (el) => ({ ...el, src }));
+                } else {
+                  const colSpan = 4000;
+                  const rowSpan = 2250;
+                  const rect = slideRef.current!.getBoundingClientRect();
+                  const col = snap(Math.max(0, Math.min(GRID_COLS - colSpan,
+                    Math.round(((e.clientX - rect.left) / rect.width) * GRID_COLS - colSpan / 2))));
+                  const row = snap(Math.max(0, Math.min(GRID_ROWS - rowSpan,
+                    Math.round(((e.clientY - rect.top) / rect.height) * GRID_ROWS - rowSpan / 2))));
+                  addEl(makeImageElement({ src, placement: { col, row, colSpan, rowSpan } }));
+                }
+              }}
+            >
+              <GridOverlay visible={isGridVisible} />
 
             {/* All content comes from the element model */}
             {[...activeSlide.elements]
@@ -482,6 +590,7 @@ export function EditorView({ startNodeId }: Props) {
                   slideRef={slideRef}
                   onSelect={() => {
                     setSelectedElId(el.id);
+                    setRailSelectionActive(false);
                     // Only clear editing if switching to a different element
                     if (selectedElId !== el.id) setEditingElId(null);
                   }}
@@ -502,6 +611,7 @@ export function EditorView({ startNodeId }: Props) {
                 <span className="text-[13px] font-mono">Click T in the toolbar to add text</span>
               </div>
             )}
+            </div>
           </div>
         </div>
 

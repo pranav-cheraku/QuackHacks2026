@@ -11,11 +11,16 @@ import {
   type Variant,
   type ComponentType,
 } from "@/lib/projektor-data";
+import { SLIDE_ELEMENTS } from "@/lib/initial-slides";
 import { Maximize2, Minus, Plus, Sparkles, Search } from "lucide-react";
+import { DEFAULT_ZOOM, ZOOM_STEP, zoomBy } from "@/lib/viewport";
 
 interface Props {
   zoom: number;
   setZoom: (z: number) => void;
+  zoomIn: () => void;
+  zoomOut: () => void;
+  isGridVisible: boolean;
   onOpenEditor: (nodeId: string) => void;
 }
 
@@ -40,8 +45,20 @@ function anchor(n: SlideNode, side: "right" | "left" | "bottom") {
   return { x: n.x + w / 2, y: n.y + h };
 }
 
-export function BoardView({ zoom, setZoom, onOpenEditor }: Props) {
-  const [nodes, setNodes] = useState<SlideNode[]>(INITIAL_NODES);
+export function BoardView({
+  zoom,
+  setZoom,
+  zoomIn,
+  zoomOut,
+  isGridVisible,
+  onOpenEditor,
+}: Props) {
+  const [nodes, setNodes] = useState<SlideNode[]>(() =>
+    INITIAL_NODES.map((node) => ({
+      ...node,
+      elements: SLIDE_ELEMENTS[node.id] ?? [],
+    })),
+  );
   const [edges] = useState<Edge[]>(INITIAL_EDGES);
   const [variants, setVariants] = useState<Variant[]>(INITIAL_VARIANTS);
   const [selected, setSelected] = useState<string | null>("n3");
@@ -136,8 +153,13 @@ export function BoardView({ zoom, setZoom, onOpenEditor }: Props) {
 
         {/* Canvas */}
         <div
-          className="flex-1 relative overflow-hidden dot-grid cursor-grab active:cursor-grabbing"
+          className={`flex-1 relative overflow-hidden cursor-grab active:cursor-grabbing ${isGridVisible ? "dot-grid" : ""}`}
           onMouseDown={onCanvasMouseDown}
+          onWheel={(e) => {
+            if (!e.ctrlKey && !e.metaKey) return;
+            e.preventDefault();
+            setZoom(zoomBy(zoom, e.deltaY < 0 ? ZOOM_STEP : -ZOOM_STEP));
+          }}
         >
           <div
             className="absolute origin-top-left"
@@ -244,19 +266,19 @@ export function BoardView({ zoom, setZoom, onOpenEditor }: Props) {
 
           {/* Floating toolbar */}
           <div className="absolute left-1/2 -translate-x-1/2 bottom-5 flex items-center gap-1 bg-chrome border border-border rounded-full shadow-[0_4px_20px_-6px_oklch(0.4_0.01_175/0.25)] px-1.5 py-1.5">
-            <ToolBtn onClick={() => setZoom(Math.max(0.3, zoom - 0.05))}>
+            <ToolBtn onClick={zoomOut}>
               <Minus size={13} />
             </ToolBtn>
             <span className="px-2 text-[11px] font-mono w-12 text-center">
               {Math.round(zoom * 100)}%
             </span>
-            <ToolBtn onClick={() => setZoom(Math.min(2, zoom + 0.05))}>
+            <ToolBtn onClick={zoomIn}>
               <Plus size={13} />
             </ToolBtn>
             <div className="w-px h-5 bg-border mx-1" />
             <ToolBtn
               onClick={() => {
-                setZoom(0.85);
+                setZoom(DEFAULT_ZOOM);
                 setPan({ x: 0, y: 0 });
               }}
             >

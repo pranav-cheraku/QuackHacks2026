@@ -23,8 +23,6 @@ export interface HydrateResult {
   mockReason?: string;
 }
 
-export type TargetDuration = 5 | 10 | 20;
-
 // ── ChunkResult ───────────────────────────────────────────────────────────────
 // Mirrors backend/landing-page/chunkingSchema.ts ChunkResult exactly.
 // Structural match is enforced at the API boundary; keep these in sync.
@@ -33,13 +31,6 @@ interface ChunkResult {
   body: string;
   kind: "title" | "problem" | "data";
   eyebrow?: string;
-}
-
-// ── Duration → slide count ────────────────────────────────────────────────────
-// Tunable: adjust the table to change pacing. Rule of thumb: ~1–1.5 slides/min.
-export function durationToSlideCount(minutes: TargetDuration): number {
-  const table: Record<TargetDuration, number> = { 5: 7, 10: 12, 20: 20 };
-  return table[minutes];
 }
 
 // ── LLM SWAP POINT ────────────────────────────────────────────────────────────
@@ -190,11 +181,8 @@ function buildSlideNodes(chunks: ChunkResult[]): Pick<HydrateResult, "nodes" | "
 }
 
 // ── Public API ────────────────────────────────────────────────────────────────
-export async function hydrateToSlides(
-  text: string,
-  duration: TargetDuration,
-): Promise<HydrateResult> {
-  const targetCount = durationToSlideCount(duration);
+export async function hydrateToSlides(text: string): Promise<HydrateResult> {
+  const targetCount = 10;
 
   let chunks: ChunkResult[];
   let source: HydrateResult["source"];

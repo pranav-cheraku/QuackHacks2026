@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import {
   AlignLeft,
   BarChart3,
@@ -11,6 +11,7 @@ import {
   Lock,
   Plus,
   Quote,
+  Send,
   Sparkles,
   Unlock,
   Video,
@@ -36,6 +37,7 @@ type Tab = "chat" | "inspect" | "argument";
 
 interface Props {
   node: SlideNode | null;
+  selectedCount: number;
   parentRelation: EdgeRelation | null; // null → this is a root (no parent)
   hasParent: boolean;
   onClose: () => void;
@@ -97,6 +99,7 @@ const BLOCK_ICON: Partial<Record<ComponentType, typeof Heading>> = {
 // the canvas viewport as an absolute sibling, so it doesn't pan with the canvas.
 export function ScenePanel({
   node,
+  selectedCount,
   parentRelation,
   hasParent,
   onClose,
@@ -118,7 +121,7 @@ export function ScenePanel({
       <div className="px-4 pt-3.5 pb-3 border-b border-border shrink-0">
         <div className="flex items-center gap-2">
           <span className="font-mono text-[10px] uppercase tracking-wider text-muted-foreground">
-            {node ? `Scene ${String(node.index).padStart(2, "0")}` : "Scene"}
+            {selectedCount > 1 ? `${selectedCount} scenes` : node ? `Scene ${String(node.index).padStart(2, "0")}` : "Graph View"}
           </span>
           <button
             type="button"
@@ -130,7 +133,7 @@ export function ScenePanel({
           </button>
         </div>
         <div className="mt-1 font-serif text-[20px] leading-[1.15] text-ink truncate">
-          {node ? node.title : "No scene selected"}
+          {selectedCount > 1 ? "Multiple scenes selected" : node ? node.title : "Your presentation"}
         </div>
 
         {/* Tabs */}
@@ -159,7 +162,9 @@ export function ScenePanel({
       </div>
 
       {/* Body */}
-      {!node ? (
+      {tab === "chat" ? (
+        <ChatTab title={node?.title ?? "your presentation"} selectedCount={selectedCount} />
+      ) : !node ? (
         <div className="flex-1 flex items-center justify-center px-6 text-center text-[13px] text-muted-foreground">
           Select a scene to inspect it.
         </div>
@@ -425,6 +430,281 @@ function InspectTab({
         >
           <Sparkles size={14} /> Generate scene
         </button>
+      </div>
+    </div>
+  );
+}
+
+interface ChatMessage {
+  id: string;
+  role: "user" | "agent";
+  content: string;
+}
+
+const AUTO_RESPONSES = [
+  "Based on the current slide structure, I'd suggest reinforcing the key claim with additional supporting evidence on the slide that follows.",
+  "This slide looks strong. Consider tightening the headline to focus on the single most important insight for the audience.",
+  "The argument flow could be improved by moving the data slide before this one to establish context first.",
+  "Nice structure overall. You might want to add a transition statement that bridges this slide's conclusion to the next claim.",
+  "The visual hierarchy could be improved here — try leading with the key stat rather than the body copy to hook the audience faster.",
+];
+let autoIdx = 0;
+
+const QUICK_PROMPTS = [
+  "Assess the slide deck flow",
+  "Improve this slide",
+  "Suggest supporting evidence",
+];
+
+interface AttachedImage {
+  file: File;
+  width: number;
+  height: number;
+  objectUrl: string;
+}
+
+function ChatTab({ title, selectedCount }: { title: string; selectedCount: number }) {
+  const [messages, setMessages] = useState<ChatMessage[]>([]);
+  const [draft, setDraft] = useState("");
+  const [attachment, setAttachment] = useState<AttachedImage | null>(null);
+  const [isTyping, setIsTyping] = useState(false);
+  const [sending, setSending] = useState(false);
+  const listRef = useRef<HTMLDivElement>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+
+  useEffect(() => {
+    if (listRef.current)
+      listRef.current.scrollTop = listRef.current.scrollHeight;
+  }, [messages]);
+
+  // Revoke object URL when attachment changes to avoid memory leaks
+  useEffect(() => {
+    return () => {
+      if (attachment) URL.revokeObjectURL(attachment.objectUrl);
+    };
+  }, [attachment]);
+
+  const submitText = (text: string) => {
+    const trimmed = text.trim();
+    if (!trimmed && !attachment) return;
+    const content = [
+      attachment ? `[Image: ${attachment.file.name} ${attachment.width}×${attachment.height}]` : "",
+      trimmed,
+    ]
+      .filter(Boolean)
+      .join("\n");
+    setMessages((prev) => [
+      ...prev,
+      { id: `msg-${Date.now()}`, role: "user", content },
+    ]);
+    setDraft("");
+    if (attachment) {
+      URL.revokeObjectURL(attachment.objectUrl);
+      setAttachment(null);
+    }
+    setIsTyping(true);
+    const response = AUTO_RESPONSES[autoIdx % AUTO_RESPONSES.length];
+    autoIdx += 1;
+    setTimeout(() => {
+      setIsTyping(false);
+      setMessages((prev) => [
+        ...prev,
+        { id: `msg-${Date.now()}`, role: "agent", content: response },
+      ]);
+    }, 1400);
+  };
+
+  const submit = () => {
+    if (!draft.trim() && !attachment) return;
+    setSending(true);
+    setTimeout(() => setSending(false), 350);
+    submitText(draft);
+  };
+
+  const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    const url = URL.createObjectURL(file);
+    const img = new Image();
+    img.onload = () => {
+      setAttachment({ file, width: img.naturalWidth, height: img.naturalHeight, objectUrl: url });
+    };
+    img.src = url;
+    e.target.value = "";
+  };
+
+  return (
+    <div className="flex-1 flex flex-col min-h-0">
+      <style>{`
+        @keyframes slideUp {
+          from { opacity: 0; transform: translateY(8px); }
+          to   { opacity: 1; transform: translateY(0); }
+        }
+        @keyframes dotBounce {
+          0%, 60%, 100% { transform: translateY(0); }
+          30%            { transform: translateY(-5px); }
+        }
+        @keyframes sendPop {
+          0%   { transform: scale(1); }
+          40%  { transform: scale(0.82); }
+          70%  { transform: scale(1.12); }
+          100% { transform: scale(1); }
+        }
+      `}</style>
+      {/* Message list */}
+      <div ref={listRef} className="flex-1 overflow-y-auto p-3 space-y-3">
+        {messages.length === 0 ? (
+          <div className="flex flex-col items-center justify-center h-full gap-4 text-center py-10">
+            <div className="w-10 h-10 rounded-full bg-accent-soft flex items-center justify-center text-accent">
+              <Sparkles size={18} />
+            </div>
+            <p className="text-[13px] text-muted-foreground leading-snug max-w-[200px]">
+              Talk to the AI about &ldquo;{title}&rdquo; and the slides
+              connected to it.
+            </p>
+            <div className="flex flex-col gap-2 w-full px-2">
+              {QUICK_PROMPTS.map((prompt) => (
+                <button
+                  key={prompt}
+                  type="button"
+                  onClick={() => submitText(prompt)}
+                  className="flex items-center gap-2 px-3 py-2 rounded-lg border border-border bg-card text-[12px] text-muted-foreground hover:text-ink hover:bg-canvas/60 transition-colors text-left"
+                >
+                  <span className="text-muted-foreground">↪</span>
+                  {prompt}
+                </button>
+              ))}
+            </div>
+          </div>
+        ) : (
+          <>
+            {messages.map((msg) =>
+              msg.role === "user" ? (
+                <div key={msg.id} className="flex justify-end" style={{ animation: "slideUp 0.25s ease-out" }}>
+                  <div
+                    className="max-w-[85%] rounded-xl rounded-tr-sm px-3 py-2 text-[12px] leading-snug text-white whitespace-pre-wrap"
+                    style={{ background: "var(--accent-teal)" }}
+                  >
+                    {msg.content}
+                  </div>
+                </div>
+              ) : (
+                <div key={msg.id} className="flex" style={{ animation: "slideUp 0.25s ease-out" }}>
+                  <div className="max-w-[85%] bg-card border border-border rounded-xl rounded-tl-sm px-3 py-2.5 text-[12px] leading-snug text-muted-foreground whitespace-pre-wrap">
+                    {msg.content}
+                  </div>
+                </div>
+              ),
+            )}
+            {isTyping && (
+              <div className="flex" style={{ animation: "slideUp 0.2s ease-out" }}>
+                <div className="bg-card border border-border rounded-xl rounded-tl-sm px-3 py-3 flex items-center gap-1">
+                  {[0, 1, 2].map((i) => (
+                    <span
+                      key={i}
+                      className="w-1.5 h-1.5 rounded-full bg-muted-foreground/50"
+                      style={{ animation: "dotBounce 1.1s ease-in-out infinite", animationDelay: `${i * 0.18}s` }}
+                    />
+                  ))}
+                </div>
+              </div>
+            )}
+          </>
+        )}
+      </div>
+
+      {/* Slides context badge */}
+      <div className="px-3 pb-1 shrink-0 flex">
+        <div className="flex items-center gap-1 px-1.5 py-0.5 rounded bg-canvas border border-border text-[10px] text-muted-foreground select-none">
+          <ImageIcon size={10} />
+          {selectedCount} slide{selectedCount !== 1 ? "s" : ""} selected
+        </div>
+      </div>
+
+      {/* Input */}
+      <div className="border-t border-border p-2.5 shrink-0 space-y-2">
+        {/* Image attachment preview */}
+        {attachment && (
+          <div className="flex items-center gap-1.5 px-1">
+            <div className="flex items-center gap-1.5 px-2 py-1 rounded-md bg-canvas border border-border text-[11px] text-muted-foreground max-w-full overflow-hidden">
+              <ImageIcon size={11} className="shrink-0 text-accent" />
+              <span className="truncate font-medium text-ink">{attachment.file.name}</span>
+              <span className="shrink-0 text-faint">
+                {attachment.width}×{attachment.height}
+              </span>
+              <button
+                type="button"
+                onClick={() => {
+                  URL.revokeObjectURL(attachment.objectUrl);
+                  setAttachment(null);
+                }}
+                className="ml-0.5 shrink-0 text-muted-foreground hover:text-ink transition-colors"
+              >
+                <X size={11} />
+              </button>
+            </div>
+          </div>
+        )}
+
+        <div className="border border-border rounded-lg px-2 py-2 bg-card flex items-center gap-1.5">
+          {/* + button — opens image upload dropup */}
+
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <button
+                type="button"
+                className="w-7 h-7 flex items-center justify-center rounded-md text-muted-foreground hover:text-ink hover:bg-canvas/60 transition-colors shrink-0"
+              >
+                <Plus size={15} />
+              </button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent
+              side="top"
+              align="start"
+              className="min-w-40 bg-chrome border-border"
+            >
+              <DropdownMenuItem
+                onSelect={() => fileInputRef.current?.click()}
+                className="flex items-center gap-2 text-[13px] cursor-pointer"
+              >
+                <ImageIcon size={13} />
+                Add image
+              </DropdownMenuItem>
+            </DropdownMenuContent>
+          </DropdownMenu>
+
+          <input
+            ref={fileInputRef}
+            type="file"
+            accept="image/*"
+            className="hidden"
+            onChange={handleFileChange}
+          />
+
+          <input
+            className="flex-1 text-[13px] bg-transparent outline-none placeholder:text-muted-foreground min-w-0"
+            placeholder="Ask about this scene…"
+            value={draft}
+            onChange={(e) => setDraft(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter" && !e.shiftKey) {
+                e.preventDefault();
+                submit();
+              }
+            }}
+          />
+          <button
+            type="button"
+            onClick={submit}
+            className="w-7 h-7 rounded-full flex items-center justify-center text-white hover:opacity-80 active:scale-90 transition-all shrink-0"
+            style={{
+              background: "var(--accent-teal)",
+              animation: sending ? "sendPop 0.35s ease-out" : undefined,
+            }}
+          >
+            <Send size={13} />
+          </button>
+        </div>
       </div>
     </div>
   );

@@ -6,7 +6,7 @@ interface Props {
   node: SlideNode;
   selected: boolean;
   dimmed?: boolean;
-  onSelect: () => void;
+  onSelect: (shiftKey: boolean) => void;
   onOpenEditor: () => void;
   onMove: (x: number, y: number) => void;
   zoom: number;
@@ -45,7 +45,7 @@ export function SlideCard({
   const onMouseDown = (e: React.MouseEvent) => {
     if ((e.target as HTMLElement).closest("[data-no-drag]")) return;
     e.stopPropagation();
-    onSelect();
+    onSelect(e.shiftKey);
     dragging.current = { ox: e.clientX, oy: e.clientY };
     const startX = node.x;
     const startY = node.y;

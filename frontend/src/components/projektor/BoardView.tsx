@@ -5,6 +5,9 @@ import { StatusFilterPanel } from "./StatusFilterPanel";
 import { DraggablePanel } from "./DraggablePanel";
 import { Minimap } from "./Minimap";
 import { ScenePanel } from "./ScenePanel";
+import { GhostCard } from "./GhostCard";
+import { GenerateNode } from "./GenerateNode";
+import { ContentGraphView } from "./ContentGraphView";
 import { SlideCard } from "./SlideCard";
 import {
   INITIAL_NODES,
@@ -14,6 +17,7 @@ import {
   type EdgeRelation,
   type SceneStatus,
   type SceneRole,
+  type SceneKind,
   type ComponentType,
   type ContentBlock,
 } from "@/lib/projektor-data";
@@ -33,6 +37,110 @@ interface Props {
 
 // Placeholder chosen spine — real pick logic lands with the branch model.
 const PICKED_PATH = new Set(["n1", "n3"]);
+
+// Placeholder candidate pool — stands in for the AI until a backend exists.
+// Generating a fork pulls the next two from here (cycling).
+const SUGGESTIONS: { title: string; rationale: string; kind: SceneKind }[] = [
+  {
+    title: "Why now — the urgency",
+    rationale: "Follow it with the cost of waiting — it sharpens the ask.",
+    kind: "problem",
+  },
+  {
+    title: "The ask — what we need",
+    rationale:
+      "Go straight to the round size and use of funds while it's fresh.",
+    kind: "title",
+  },
+  {
+    title: "Proof in the numbers",
+    rationale: "Lead with the metric that moved most — let the chart carry it.",
+    kind: "data",
+  },
+  {
+    title: "Who it's for",
+    rationale: "Ground the story in one customer feeling the problem today.",
+    kind: "problem",
+  },
+  {
+    title: "The bigger vision",
+    rationale: "Zoom out to the 10-year picture before landing the close.",
+    kind: "title",
+  },
+  {
+    title: "How it works",
+    rationale: "Show the loop end-to-end so the 'how' is obvious.",
+    kind: "problem",
+  },
+];
+
+// Tidy tree layout: each leaf gets a horizontal slot; each parent is centered
+// over its children; rows by depth. Anchored to the root's current position so
+// the root stays put and the camera doesn't move. Pure — returns new nodes.
+function tidyNodes(ns: SlideNode[], es: Edge[]): SlideNode[] {
+  const childrenMap = new Map<string, string[]>();
+  es.forEach((e) =>
+    childrenMap.set(e.from, [...(childrenMap.get(e.from) ?? []), e.to]),
+  );
+  const hasParent = new Set(es.map((e) => e.to));
+  const byId = new Map(ns.map((n) => [n.id, n]));
+  const widthOf = (id: string) => byId.get(id)?.width ?? 320;
+  const vGap = 300;
+  const gap = 60;
+
+  const centerX = new Map<string, number>();
+  const yOf = new Map<string, number>();
+  const seen = new Set<string>();
+  let cursor = 0;
+
+  const childIds = (id: string) =>
+    (childrenMap.get(id) ?? [])
+      .map((cid) => byId.get(cid))
+      .filter((n): n is SlideNode => Boolean(n))
+      .sort((a, b) => a.index - b.index)
+      .map((n) => n.id);
+
+  const place = (id: string, depth: number): number => {
+    if (seen.has(id)) return centerX.get(id) ?? 0; // cycle guard
+    seen.add(id);
+    yOf.set(id, depth * vGap);
+    const kids = childIds(id);
+    if (kids.length === 0) {
+      const cx = cursor + widthOf(id) / 2;
+      cursor += widthOf(id) + gap;
+      centerX.set(id, cx);
+      return cx;
+    }
+    const kidCenters = kids.map((k) => place(k, depth + 1));
+    const cx = (kidCenters[0] + kidCenters[kidCenters.length - 1]) / 2;
+    centerX.set(id, cx);
+    return cx;
+  };
+
+  const roots = ns
+    .filter((n) => !hasParent.has(n.id))
+    .sort((a, b) => a.index - b.index);
+  (roots.length ? roots : ns.slice(0, 1)).forEach((r) => place(r.id, 0));
+  ns.forEach((n) => place(n.id, 0)); // any orphans
+
+  // Anchor the root's top-left to where it already is.
+  const root = roots[0] ?? ns[0];
+  const rootNewLeft = root
+    ? (centerX.get(root.id) ?? 0) - widthOf(root.id) / 2
+    : 0;
+  const dx = root ? root.x - rootNewLeft : 0;
+  const dy = root ? root.y - (yOf.get(root.id) ?? 0) : 0;
+
+  return ns.map((n) => {
+    const cx = centerX.get(n.id);
+    if (cx == null) return n;
+    return {
+      ...n,
+      x: cx - widthOf(n.id) / 2 + dx,
+      y: (yOf.get(n.id) ?? 0) + dy,
+    };
+  });
+}
 
 function buildPath(
   a: { x: number; y: number },
@@ -59,6 +167,7 @@ export function BoardView({ zoom, setZoom, onOpenEditor }: Props) {
   const [edges, setEdges] = useState<Edge[]>(INITIAL_EDGES);
   const [selected, setSelected] = useState<string | null>("n1");
   const [inspectorOpen, setInspectorOpen] = useState(true);
+  const [contentSceneId, setContentSceneId] = useState<string | null>(null);
   const [pan, setPan] = useState({ x: 0, y: 0 });
   const [focusPicked, setFocusPicked] = useState(false);
   const [outlineOpen, setOutlineOpen] = useState(false);
@@ -70,6 +179,7 @@ export function BoardView({ zoom, setZoom, onOpenEditor }: Props) {
   const panRef = useRef<{ x: number; y: number } | null>(null);
   const viewportRef = useRef<HTMLDivElement>(null);
   const blockSeq = useRef(0); // monotonic ids for added content blocks
+  const genSeq = useRef(0); // monotonic ids for generated candidate nodes
 
   const findNode = (id: string) => nodes.find((n) => n.id === id)!;
 
@@ -115,6 +225,59 @@ export function BoardView({ zoom, setZoom, onOpenEditor }: Props) {
   const setRelation = (toId: string, relation: EdgeRelation) =>
     setEdges((es) => es.map((e) => (e.to === toId ? { ...e, relation } : e)));
 
+  // --- Ghost (suggested branch) actions ------------------------------------
+  // Accept = pick this fork: promote it to a committed scene + solidify its
+  // edge, and dim the sibling candidates (same parent) — rejected-but-revisitable.
+  const acceptGhost = (id: string) => {
+    const parentId = edges.find((e) => e.to === id)?.from;
+    const siblingGhostIds = parentId
+      ? nodes
+          .filter(
+            (n) =>
+              n.ghost &&
+              n.id !== id &&
+              edges.some((e) => e.from === parentId && e.to === n.id),
+          )
+          .map((n) => n.id)
+      : [];
+    setNodes((ns) =>
+      ns.map((n) => {
+        if (n.id === id) return { ...n, ghost: false, discarded: false };
+        if (siblingGhostIds.includes(n.id)) return { ...n, discarded: true };
+        return n;
+      }),
+    );
+    setEdges((es) =>
+      es.map((e) => (e.to === id ? { ...e, dashed: false } : e)),
+    );
+  };
+  // Discard: keep it on the canvas but dimmed and revisitable (never deleted).
+  const discardGhost = (id: string) => patchNode(id, { discarded: true });
+  const reconsiderGhost = (id: string) => patchNode(id, { discarded: false });
+
+  // Delete: remove the node (and any subtree under it) for good — unlike
+  // Discard, there's no coming back. Re-tidies what's left.
+  const deleteNode = (id: string) => {
+    const toRemove = new Set<string>([id]);
+    let grew = true;
+    while (grew) {
+      grew = false;
+      edges.forEach((e) => {
+        if (toRemove.has(e.from) && !toRemove.has(e.to)) {
+          toRemove.add(e.to);
+          grew = true;
+        }
+      });
+    }
+    const nextNodes = nodes.filter((n) => !toRemove.has(n.id));
+    const nextEdges = edges.filter(
+      (e) => !toRemove.has(e.from) && !toRemove.has(e.to),
+    );
+    setEdges(nextEdges);
+    setNodes(tidyNodes(nextNodes, nextEdges));
+    if (selected && toRemove.has(selected)) setSelected(null);
+  };
+
   const selectedNode = selected
     ? (nodes.find((n) => n.id === selected) ?? null)
     : null;
@@ -122,11 +285,24 @@ export function BoardView({ zoom, setZoom, onOpenEditor }: Props) {
     ? edges.find((e) => e.to === selected)
     : undefined;
 
-  // A node dims when it's off the picked path (focus) or filtered out by status.
+  // A node dims when it's off the picked path (focus), filtered out by status,
+  // or a discarded (rejected-but-revisitable) suggested branch.
   const isNodeDimmed = (n: SlideNode) =>
-    (focusPicked && !PICKED_PATH.has(n.id)) || !activeStatuses.has(n.status);
+    (focusPicked && !PICKED_PATH.has(n.id)) ||
+    !activeStatuses.has(n.status) ||
+    Boolean(n.discarded);
   const isEdgeDimmed = (e: Edge) =>
     isNodeDimmed(findNode(e.from)) || isNodeDimmed(findNode(e.to));
+
+  // A committed leaf slide carries a "Generate next" node just below it — the
+  // affordance that forks the next two candidates. Ghosts can't generate until
+  // they're accepted (picking unlocks Generate next); internal and discarded
+  // nodes don't show it either.
+  const parentIds = new Set(edges.map((e) => e.from));
+  const leafNodes = nodes.filter(
+    (n) => !parentIds.has(n.id) && !n.discarded && !n.ghost,
+  );
+  const GEN_GAP = 32; // gap between a card's bottom and its Generate-next node
 
   const toggleStatus = (s: SceneStatus) =>
     setActiveStatuses((prev) => {
@@ -136,65 +312,51 @@ export function BoardView({ zoom, setZoom, onOpenEditor }: Props) {
       return next;
     });
 
-  // Auto-tidy: reformat the tree (top-down by depth) IN PLACE — keep it
-  // centered where it already is so the camera/view doesn't move.
-  const autoTidy = () => {
-    const childrenMap = new Map<string, string[]>();
-    edges.forEach((e) =>
-      childrenMap.set(e.from, [...(childrenMap.get(e.from) ?? []), e.to]),
-    );
-    const hasParent = new Set(edges.map((e) => e.to));
-    const depth = new Map<string, number>();
-    const queue = nodes.filter((n) => !hasParent.has(n.id)).map((n) => n.id);
-    queue.forEach((id) => depth.set(id, 0));
-    for (let i = 0; i < queue.length; i++) {
-      const id = queue[i];
-      const d = depth.get(id) ?? 0;
-      (childrenMap.get(id) ?? []).forEach((c) => {
-        if (!depth.has(c)) {
-          depth.set(c, d + 1);
-          queue.push(c);
-        }
-      });
-    }
-    const levels = new Map<number, string[]>();
-    nodes.forEach((n) => {
-      const d = depth.get(n.id) ?? 0;
-      levels.set(d, [...(levels.get(d) ?? []), n.id]);
-    });
+  // Auto-tidy: reflow the tree into a clean layered layout, in place.
+  const autoTidy = () => setNodes((ns) => tidyNodes(ns, edges));
 
-    const vGap = 300;
-    const hGap = 380;
-
-    // Lay the tidy tree out around the origin first.
-    const raw = nodes.map((n) => {
-      const d = depth.get(n.id) ?? 0;
-      const level = levels.get(d) ?? [n.id];
-      const idx = level.indexOf(n.id);
-      const w = n.width ?? 320;
-      return {
-        id: n.id,
-        x: (idx - (level.length - 1) / 2) * hGap - w / 2,
-        y: d * vGap,
-        w,
-        h: n.height ?? 180,
-      };
-    });
-
-    // Anchor the layout to the ROOT's current position: the root stays
-    // exactly where it is, only the format below it changes. Nothing the
-    // user is looking at jumps, and the camera never moves.
-    const byId = new Map(raw.map((r) => [r.id, r]));
-    const rootNode = nodes.find((n) => !hasParent.has(n.id)) ?? nodes[0];
-    const rootRaw = rootNode ? byId.get(rootNode.id) : undefined;
-    const dx = rootNode && rootRaw ? rootNode.x - rootRaw.x : 0;
-    const dy = rootNode && rootRaw ? rootNode.y - rootRaw.y : 0;
-    setNodes((ns) =>
-      ns.map((n) => {
-        const r = byId.get(n.id);
-        return r ? { ...n, x: r.x + dx, y: r.y + dy } : n;
-      }),
-    );
+  // Generate: spawn two AI candidate options below a card, then tidy so the
+  // growing tree stays readable. Works on any card — committed or ghost — so
+  // the possibility tree expands by clicking Generate, fork after fork.
+  const generateOptions = (parentId: string) => {
+    const parent = nodes.find((n) => n.id === parentId);
+    if (!parent) return;
+    const maxIndex = nodes.reduce((m, n) => Math.max(m, n.index), 0);
+    const k = genSeq.current;
+    genSeq.current += 2;
+    const picks = [
+      SUGGESTIONS[k % SUGGESTIONS.length],
+      SUGGESTIONS[(k + 1) % SUGGESTIONS.length],
+    ];
+    const newGhosts: SlideNode[] = picks.map((p, i) => ({
+      id: `gen-${genSeq.current}-${i}`,
+      index: maxIndex + 1 + i,
+      title: p.title,
+      kind: p.kind,
+      status: "draft",
+      ghost: true,
+      rationale: p.rationale,
+      // Rough position; tidyNodes overrides it. Required by the type.
+      x: parent.x,
+      y: parent.y + (parent.height ?? 180) + 300,
+      width: 280,
+      height: 168,
+      state: "ingredient",
+      thumb: "list",
+      elements: [],
+      candidates: [],
+      activeDesignId: null,
+    }));
+    const newEdges: Edge[] = newGhosts.map((g) => ({
+      from: parentId,
+      to: g.id,
+      relation: "sequence",
+      dashed: true,
+    }));
+    const nextEdges = [...edges, ...newEdges];
+    setEdges(nextEdges);
+    setNodes(tidyNodes([...nodes, ...newGhosts], nextEdges));
+    selectNode(parentId);
   };
 
   // Outline click → select the node and fly the canvas to center it.
@@ -267,6 +429,23 @@ export function BoardView({ zoom, setZoom, onOpenEditor }: Props) {
     setZoom(Math.min(200, Math.max(30, pct + dir * 5)) / 100);
   };
 
+  // Drilling into a scene's content swaps the whole board for its content graph.
+  const contentScene = contentSceneId
+    ? (nodes.find((n) => n.id === contentSceneId) ?? null)
+    : null;
+  if (contentScene) {
+    return (
+      <div className="flex-1 flex flex-col min-w-0 relative">
+        <ContentGraphView
+          scene={contentScene}
+          onBack={() => setContentSceneId(null)}
+          onAddBlock={addBlock}
+          onRemoveBlock={removeBlock}
+        />
+      </div>
+    );
+  }
+
   return (
     <div className="flex-1 flex flex-col min-w-0 relative">
       {/* Canvas */}
@@ -318,6 +497,24 @@ export function BoardView({ zoom, setZoom, onOpenEditor }: Props) {
                 />
               );
             })}
+            {/* Short connectors down to each leaf's Generate-next node */}
+            {leafNodes.map((n) => {
+              const cx = n.x + (n.width ?? 320) / 2;
+              const y1 = n.y + (n.height ?? 180);
+              const y2 = y1 + GEN_GAP;
+              return (
+                <path
+                  key={`gen-arrow-${n.id}`}
+                  d={`M ${cx} ${y1} L ${cx} ${y2}`}
+                  fill="none"
+                  stroke="var(--accent)"
+                  strokeOpacity={isNodeDimmed(n) ? 0.2 : 0.55}
+                  strokeWidth="1.75"
+                  strokeDasharray="5 4"
+                  markerEnd="url(#arrowhead)"
+                />
+              );
+            })}
           </svg>
 
           {/* Edge relation labels */}
@@ -344,23 +541,59 @@ export function BoardView({ zoom, setZoom, onOpenEditor }: Props) {
           })}
 
           {/* Nodes */}
-          {nodes.map((n) => (
-            <div key={n.id} data-node>
-              <SlideCard
-                node={n}
-                selected={selected === n.id}
-                dimmed={isNodeDimmed(n)}
-                onSelect={() => selectNode(n.id)}
-                onOpenEditor={() => onOpenEditor(n.id)}
-                onMove={(x, y) =>
-                  setNodes((ns) =>
-                    ns.map((m) => (m.id === n.id ? { ...m, x, y } : m)),
-                  )
-                }
-                zoom={zoom}
-              />
-            </div>
-          ))}
+          {nodes.map((n) => {
+            const onMove = (x: number, y: number) =>
+              setNodes((ns) =>
+                ns.map((m) => (m.id === n.id ? { ...m, x, y } : m)),
+              );
+            return (
+              <div key={n.id} data-node>
+                {n.ghost ? (
+                  <GhostCard
+                    node={n}
+                    selected={selected === n.id}
+                    dimmed={isNodeDimmed(n)}
+                    onSelect={() => selectNode(n.id)}
+                    onMove={onMove}
+                    onAccept={() => acceptGhost(n.id)}
+                    onDiscard={() => discardGhost(n.id)}
+                    onReconsider={() => reconsiderGhost(n.id)}
+                    onDelete={() => deleteNode(n.id)}
+                    zoom={zoom}
+                  />
+                ) : (
+                  <SlideCard
+                    node={n}
+                    selected={selected === n.id}
+                    dimmed={isNodeDimmed(n)}
+                    onSelect={() => selectNode(n.id)}
+                    onOpenEditor={() => onOpenEditor(n.id)}
+                    onMove={onMove}
+                    zoom={zoom}
+                  />
+                )}
+              </div>
+            );
+          })}
+
+          {/* Generate-next nodes — one per leaf, just below the card */}
+          {leafNodes.map((n) => {
+            const cx = n.x + (n.width ?? 320) / 2;
+            const top = n.y + (n.height ?? 180) + GEN_GAP;
+            return (
+              <div
+                key={`gen-node-${n.id}`}
+                data-node
+                className="absolute"
+                style={{ left: cx - 84, top }}
+              >
+                <GenerateNode
+                  onClick={() => generateOptions(n.id)}
+                  dimmed={isNodeDimmed(n)}
+                />
+              </div>
+            );
+          })}
         </div>
 
         {/* Left tool rail */}
@@ -432,6 +665,11 @@ export function BoardView({ zoom, setZoom, onOpenEditor }: Props) {
             onToggleLock={toggleLock}
             onAddBlock={addBlock}
             onRemoveBlock={removeBlock}
+            onOpenContent={setContentSceneId}
+            onAccept={acceptGhost}
+            onDiscard={discardGhost}
+            onReconsider={reconsiderGhost}
+            onDelete={deleteNode}
           />
         )}
 

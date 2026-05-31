@@ -1,29 +1,23 @@
 import { useState } from "react";
 import {
-  AlignLeft,
-  BarChart3,
+  Check,
   ChevronDown,
-  Hash,
-  Heading,
-  Heading2,
-  Image as ImageIcon,
-  List as ListIcon,
+  ChevronRight,
   Lock,
-  Plus,
-  Quote,
+  RotateCcw,
   Sparkles,
+  Trash2,
   Unlock,
-  Video,
   X,
 } from "lucide-react";
 import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
-  DropdownMenuLabel,
-  DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
+import { AddContentMenu } from "./AddContentMenu";
+import { blockIcon } from "@/lib/content-blocks";
 import type {
   ComponentType,
   EdgeRelation,
@@ -45,6 +39,11 @@ interface Props {
   onToggleLock: (id: string) => void;
   onAddBlock: (id: string, type: ComponentType) => void;
   onRemoveBlock: (id: string, blockId: string) => void;
+  onOpenContent: (id: string) => void;
+  onAccept: (id: string) => void;
+  onDiscard: (id: string) => void;
+  onReconsider: (id: string) => void;
+  onDelete: (id: string) => void;
 }
 
 const STATUS_OPTIONS: { value: SceneStatus; label: string; dot: string }[] = [
@@ -66,33 +65,6 @@ const RELATION_OPTIONS: { value: EdgeRelation; label: string }[] = [
   { value: "sequence", label: "Sequence" },
 ];
 
-// "+ Add content" menu (spec): Text group + Media group.
-const ADD_TEXT: { type: ComponentType; label: string }[] = [
-  { type: "Header", label: "Header" },
-  { type: "Subheader", label: "Subheader" },
-  { type: "Body", label: "Body" },
-  { type: "List", label: "Bullet list" },
-  { type: "Stat", label: "Stat / number" },
-  { type: "Quote", label: "Quote" },
-];
-const ADD_MEDIA: { type: ComponentType; label: string }[] = [
-  { type: "Image", label: "Image" },
-  { type: "Video", label: "Video" },
-  { type: "Chart", label: "Chart" },
-];
-
-const BLOCK_ICON: Partial<Record<ComponentType, typeof Heading>> = {
-  Header: Heading,
-  Subheader: Heading2,
-  Body: AlignLeft,
-  List: ListIcon,
-  Stat: Hash,
-  Quote: Quote,
-  Image: ImageIcon,
-  Video: Video,
-  Chart: BarChart3,
-};
-
 // Floating right panel: everything about the one selected scene. Lives inside
 // the canvas viewport as an absolute sibling, so it doesn't pan with the canvas.
 export function ScenePanel({
@@ -106,8 +78,14 @@ export function ScenePanel({
   onToggleLock,
   onAddBlock,
   onRemoveBlock,
+  onOpenContent,
+  onAccept,
+  onDiscard,
+  onReconsider,
+  onDelete,
 }: Props) {
   const [tab, setTab] = useState<Tab>("inspect");
+  const isGhost = Boolean(node?.ghost);
 
   return (
     <div
@@ -117,8 +95,22 @@ export function ScenePanel({
       {/* Header */}
       <div className="px-4 pt-3.5 pb-3 border-b border-border shrink-0">
         <div className="flex items-center gap-2">
-          <span className="font-mono text-[10px] uppercase tracking-wider text-muted-foreground">
-            {node ? `Scene ${String(node.index).padStart(2, "0")}` : "Scene"}
+          <span
+            className="inline-flex items-center gap-1 font-mono text-[10px] uppercase tracking-wider"
+            style={
+              isGhost
+                ? { color: "var(--accent)", fontWeight: 600 }
+                : { color: "var(--muted-foreground)" }
+            }
+          >
+            {isGhost && <Sparkles size={11} />}
+            {!node
+              ? "Scene"
+              : isGhost
+                ? node.discarded
+                  ? "Discarded"
+                  : "Suggested"
+                : `Scene ${String(node.index).padStart(2, "0")}`}
           </span>
           <button
             type="button"
@@ -133,29 +125,31 @@ export function ScenePanel({
           {node ? node.title : "No scene selected"}
         </div>
 
-        {/* Tabs */}
-        <div className="mt-3 flex items-center gap-1 p-0.5 rounded-lg bg-canvas">
-          {(
-            [
-              ["chat", "Chat"],
-              ["inspect", "Inspect"],
-              ["argument", "Argument"],
-            ] as [Tab, string][]
-          ).map(([value, label]) => (
-            <button
-              key={value}
-              type="button"
-              onClick={() => setTab(value)}
-              className={`flex-1 py-1.5 rounded-md text-[12.5px] font-semibold transition-colors ${
-                tab === value
-                  ? "bg-chrome text-ink shadow-[0_1px_3px_-1px_rgba(40,30,20,0.18)]"
-                  : "text-muted-foreground hover:text-ink"
-              }`}
-            >
-              {label}
-            </button>
-          ))}
-        </div>
+        {/* Tabs (committed scenes only — a ghost isn't editable yet) */}
+        {node && !isGhost && (
+          <div className="mt-3 flex items-center gap-1 p-0.5 rounded-lg bg-canvas">
+            {(
+              [
+                ["chat", "Chat"],
+                ["inspect", "Inspect"],
+                ["argument", "Argument"],
+              ] as [Tab, string][]
+            ).map(([value, label]) => (
+              <button
+                key={value}
+                type="button"
+                onClick={() => setTab(value)}
+                className={`flex-1 py-1.5 rounded-md text-[12.5px] font-semibold transition-colors ${
+                  tab === value
+                    ? "bg-chrome text-ink shadow-[0_1px_3px_-1px_rgba(40,30,20,0.18)]"
+                    : "text-muted-foreground hover:text-ink"
+                }`}
+              >
+                {label}
+              </button>
+            ))}
+          </div>
+        )}
       </div>
 
       {/* Body */}
@@ -163,6 +157,14 @@ export function ScenePanel({
         <div className="flex-1 flex items-center justify-center px-6 text-center text-[13px] text-muted-foreground">
           Select a scene to inspect it.
         </div>
+      ) : isGhost ? (
+        <GhostTab
+          node={node}
+          onAccept={onAccept}
+          onDiscard={onDiscard}
+          onReconsider={onReconsider}
+          onDelete={onDelete}
+        />
       ) : tab === "inspect" ? (
         <InspectTab
           node={node}
@@ -174,6 +176,7 @@ export function ScenePanel({
           onToggleLock={onToggleLock}
           onAddBlock={onAddBlock}
           onRemoveBlock={onRemoveBlock}
+          onOpenContent={onOpenContent}
         />
       ) : (
         <StubTab tab={tab} title={node.title} />
@@ -192,6 +195,7 @@ function InspectTab({
   onToggleLock,
   onAddBlock,
   onRemoveBlock,
+  onOpenContent,
 }: {
   node: SlideNode;
   parentRelation: EdgeRelation | null;
@@ -202,6 +206,7 @@ function InspectTab({
   onToggleLock: (id: string) => void;
   onAddBlock: (id: string, type: ComponentType) => void;
   onRemoveBlock: (id: string, blockId: string) => void;
+  onOpenContent: (id: string) => void;
 }) {
   const status = STATUS_OPTIONS.find((o) => o.value === node.status)!;
   const role = node.role ?? "claim";
@@ -330,50 +335,18 @@ function InspectTab({
 
         <div className="h-px bg-line-soft" />
 
-        {/* Content blocks */}
+        {/* Content blocks — header opens the scene's content graph */}
         <div>
           <div className="flex items-center justify-between mb-2">
-            <span className="text-[12px] font-semibold text-ink">
+            <button
+              type="button"
+              onClick={() => onOpenContent(node.id)}
+              className="flex items-center gap-1 text-[12px] font-semibold text-ink hover:text-accent transition-colors"
+            >
               Content blocks
-            </span>
-            <DropdownMenu>
-              <DropdownMenuTrigger asChild>
-                <button
-                  type="button"
-                  className="flex items-center gap-1 px-2 py-1 rounded-md text-[12px] font-semibold text-accent hover:bg-accent-soft/60 transition-colors"
-                >
-                  <Plus size={12} /> Add content
-                </button>
-              </DropdownMenuTrigger>
-              <DropdownMenuContent
-                align="end"
-                className="min-w-[176px] bg-chrome border-border"
-              >
-                <DropdownMenuLabel className="text-[10px] font-mono uppercase tracking-wider text-muted-foreground">
-                  Text
-                </DropdownMenuLabel>
-                {ADD_TEXT.map((o) => (
-                  <AddRow
-                    key={o.type}
-                    type={o.type}
-                    label={o.label}
-                    onSelect={() => onAddBlock(node.id, o.type)}
-                  />
-                ))}
-                <DropdownMenuSeparator className="bg-line-soft" />
-                <DropdownMenuLabel className="text-[10px] font-mono uppercase tracking-wider text-muted-foreground">
-                  Media
-                </DropdownMenuLabel>
-                {ADD_MEDIA.map((o) => (
-                  <AddRow
-                    key={o.type}
-                    type={o.type}
-                    label={o.label}
-                    onSelect={() => onAddBlock(node.id, o.type)}
-                  />
-                ))}
-              </DropdownMenuContent>
-            </DropdownMenu>
+              <ChevronRight size={13} className="text-muted-foreground" />
+            </button>
+            <AddContentMenu onAdd={(type) => onAddBlock(node.id, type)} />
           </div>
 
           {blocks.length === 0 ? (
@@ -383,7 +356,7 @@ function InspectTab({
           ) : (
             <div className="space-y-1.5">
               {blocks.map((b) => {
-                const Icon = BLOCK_ICON[b.type] ?? AlignLeft;
+                const Icon = blockIcon(b.type);
                 return (
                   <div
                     key={b.id}
@@ -444,6 +417,74 @@ function StubTab({ tab, title }: { tab: Tab; title: string }) {
       <span className="font-mono text-[10px] uppercase tracking-wider text-faint">
         Coming soon
       </span>
+    </div>
+  );
+}
+
+// Ghost (suggested branch) view: rationale + Accept / Discard, mirroring the
+// card actions. Discarded ghosts can be reconsidered (revisitable, not deleted).
+function GhostTab({
+  node,
+  onAccept,
+  onDiscard,
+  onReconsider,
+  onDelete,
+}: {
+  node: SlideNode;
+  onAccept: (id: string) => void;
+  onDiscard: (id: string) => void;
+  onReconsider: (id: string) => void;
+  onDelete: (id: string) => void;
+}) {
+  const discarded = Boolean(node.discarded);
+  return (
+    <div className="flex-1 flex flex-col min-h-0">
+      <div className="flex-1 overflow-y-auto px-4 py-4 space-y-3">
+        <p className="text-[13px] leading-relaxed text-ink">
+          {node.rationale ?? "An AI-suggested next slide for your deck."}
+        </p>
+        <p className="text-[12px] leading-relaxed text-muted-foreground">
+          {discarded
+            ? "You set this branch aside. It stays here, dimmed, so you can revisit the road not taken."
+            : "Accept to add it to your deck, or discard to set it aside — discarded branches stay revisitable."}
+        </p>
+      </div>
+      <div className="shrink-0 px-4 py-3 border-t border-border">
+        {discarded ? (
+          <button
+            type="button"
+            onClick={() => onReconsider(node.id)}
+            className="w-full flex items-center justify-center gap-1.5 py-2 rounded-lg text-[13px] font-semibold text-ink border border-border bg-chrome hover:bg-canvas/60 transition-colors"
+          >
+            <RotateCcw size={14} /> Reconsider
+          </button>
+        ) : (
+          <div className="flex items-center gap-2">
+            <button
+              type="button"
+              onClick={() => onDiscard(node.id)}
+              className="flex-1 flex items-center justify-center gap-1.5 py-2 rounded-lg text-[13px] font-semibold text-ink-soft border border-border bg-chrome hover:text-ink transition-colors"
+            >
+              <X size={14} /> Discard
+            </button>
+            <button
+              type="button"
+              onClick={() => onAccept(node.id)}
+              className="flex-1 flex items-center justify-center gap-1.5 py-2 rounded-lg text-[13px] font-semibold text-white transition-opacity hover:opacity-90"
+              style={{ background: "var(--accent)" }}
+            >
+              <Check size={14} strokeWidth={2.5} /> Accept
+            </button>
+          </div>
+        )}
+        <button
+          type="button"
+          onClick={() => onDelete(node.id)}
+          className="mt-2 w-full flex items-center justify-center gap-1.5 py-1.5 rounded-lg text-[12px] font-medium text-muted-foreground hover:text-danger transition-colors"
+        >
+          <Trash2 size={13} /> Delete permanently
+        </button>
+      </div>
     </div>
   );
 }
@@ -509,27 +550,6 @@ function MenuRow({
       className="gap-1.5 text-[13px] cursor-pointer focus:bg-canvas focus:text-ink"
     >
       {children}
-    </DropdownMenuItem>
-  );
-}
-
-function AddRow({
-  type,
-  label,
-  onSelect,
-}: {
-  type: ComponentType;
-  label: string;
-  onSelect: () => void;
-}) {
-  const Icon = BLOCK_ICON[type] ?? AlignLeft;
-  return (
-    <DropdownMenuItem
-      onSelect={onSelect}
-      className="gap-2 text-[13px] cursor-pointer focus:bg-canvas focus:text-ink"
-    >
-      <Icon size={14} className="text-muted-foreground" />
-      {label}
     </DropdownMenuItem>
   );
 }

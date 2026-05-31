@@ -1139,6 +1139,15 @@ export function BoardView({
                   ),
                 );
               }}
+              onDelete={() => {
+                onContentPoolChange?.(contentPool.filter((c) => c.id !== cn.id));
+                if (selectedContentId === cn.id) setSelectedContentId(null);
+              }}
+              onChange={(updated) => {
+                onContentPoolChange?.(
+                  contentPool.map((c) => (c.id === cn.id ? { ...updated, graphPosition: c.graphPosition } : c)),
+                );
+              }}
             />
           ))}
 

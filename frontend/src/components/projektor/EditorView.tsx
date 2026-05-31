@@ -14,7 +14,7 @@ import { GridOverlay } from "./GridOverlay";
 import {
   collectLeaves, applySlideEditOp, emptyRoot, deepCloneWithNewIds,
   makeTextLeaf, makeShapeLeaf, makeImageLeaf, makeLeafId,
-  materializeContentNodes,
+  materializeContentNodes, makeTitleOnlyRoot,
 } from "@/lib/ir";
 import type { LayoutNode, LeafNode, SlideEditOp, TextBlockStyle, ShapeBlockStyle, ContentNode } from "@/lib/ir";
 import { gridToCSS, GRID_COLS, GRID_ROWS, snap, SNAP_STEP } from "@/lib/grid";
@@ -285,6 +285,16 @@ export function EditorView({
         updater: (prev) =>
           prev.map((s) =>
             s.id === startNodeId ? { ...s, root: materializedRoot } : s,
+          ),
+      });
+    } else {
+      // No content connected — reset to a clean title-only slide, clearing any stale AI-generated root.
+      const titleRoot = makeTitleOnlyRoot(startNodeId, target.title);
+      dispatch({
+        type: "commit",
+        updater: (prev) =>
+          prev.map((s) =>
+            s.id === startNodeId ? { ...s, root: titleRoot } : s,
           ),
       });
     }

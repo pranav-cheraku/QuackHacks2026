@@ -200,13 +200,9 @@ function Preview({ node, connectedContent }: { node: SlideNode; connectedContent
     );
   }
 
-  // Fallback generic previews when no content is assigned
+  // No content connected — blank preview for title slides
   if (node.kind === "title") {
-    return (
-      <p className="text-[12.5px] leading-snug text-muted-foreground">
-        {node.body}
-      </p>
-    );
+    return null;
   }
 
   if (node.kind === "problem") {

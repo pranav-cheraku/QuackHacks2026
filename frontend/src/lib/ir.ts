@@ -546,6 +546,43 @@ function contentNodeToLeaf(cn: ContentNode, placement: GridPlacement): LeafNode 
   };
 }
 
+export function makeTitleOnlyRoot(sceneId: string, title: string): StackNode {
+  return {
+    kind: 'stack',
+    id: `root-${sceneId}`,
+    dir: 'col',
+    gap: 0,
+    children: [
+      {
+        kind: 'leaf',
+        id: makeLeafId(),
+        placement: {
+          col:     Math.round(GRID_COLS * 0.06),
+          row:     Math.round(GRID_ROWS * 0.20),
+          colSpan: Math.round(GRID_COLS * 0.88),
+          rowSpan: Math.round(GRID_ROWS * 0.45),
+        },
+        block: {
+          role: 'text',
+          text: title,
+          style: {
+            fontSize: 72,
+            fontWeight: 700,
+            fontStyle: 'normal',
+            textDecoration: 'none',
+            textAlign: 'left',
+            color: 'oklch(0.24 0.009 185)',
+            lineHeight: 1.1,
+          },
+        },
+        zIndex: 1,
+        opacity: 1,
+        rotation: 0,
+      },
+    ],
+  };
+}
+
 export function materializeContentNodes(
   contentNodes: ContentNode[],
   sceneId: string,

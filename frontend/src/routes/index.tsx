@@ -19,16 +19,15 @@ export const Route = createFileRoute("/")({
 });
 
 function Projektor() {
-  const [mode, setMode] = useState<"board" | "editor">("board");
-  const [zoom, setZoom] = useState(1);
-  const [isGridVisible, setIsGridVisible] = useState(false);
+  const [mode, setMode] = useState<"board" | "editor">("editor");
+  const [zoom, setZoom] = useState(0.85);
   const [editorStart, setEditorStart] = useState<string | null>(null);
 
   const toggleGrid = () => setIsGridVisible((v) => !v);
 
   return (
     <div className="h-screen flex flex-col bg-chrome text-ink overflow-hidden">
-      <TopBar mode={mode} setMode={setMode} />
+      <TopBar mode={mode} setMode={setMode} deckTitle="Q3 Strategy Review" />
       {mode === "board" && (
         <BoardView
           zoom={zoom}
@@ -39,19 +38,21 @@ function Projektor() {
           }}
         />
       )}
-      {/* EditorView stays mounted so its undo history / edits survive Board↔Slides switches */}
+      {/* EditorView stays mounted so useState never resets; display:none hides it in board mode */}
       <div
         className="flex-1 min-h-0 flex flex-col"
         style={{ display: mode === "editor" ? undefined : "none" }}
       >
-        <EditorView
-          startNodeId={editorStart}
-          zoom={zoom}
-          setZoom={setZoom}
-          isGridVisible={isGridVisible}
-          toggleGrid={toggleGrid}
-        />
+        <EditorView startNodeId={editorStart} />
       </div>
+      <StatusBar
+        mode={mode}
+        slideCount={6}
+        branchCount={1}
+        zoom={zoom}
+        setZoom={setZoom}
+        deckName="q3-strategy-review.proj"
+      />
     </div>
   );
 }

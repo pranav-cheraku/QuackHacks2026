@@ -9,7 +9,6 @@ import {
   type SlideNode,
   type Edge,
   type Variant,
-  type ComponentType,
 } from "@/lib/projektor-data";
 import { Maximize2, Minus, Plus, Sparkles } from "lucide-react";
 
@@ -44,7 +43,7 @@ export function BoardView({ zoom, setZoom, onOpenEditor }: Props) {
   const [nodes, setNodes] = useState<SlideNode[]>(INITIAL_NODES);
   const [edges] = useState<Edge[]>(INITIAL_EDGES);
   const [variants, setVariants] = useState<Variant[]>(INITIAL_VARIANTS);
-  const [selected, setSelected] = useState<string | null>("n3");
+  const [selected, setSelected] = useState<string | null>("n1");
   const [pan, setPan] = useState({ x: 0, y: 0 });
   const panRef = useRef<{ x: number; y: number } | null>(null);
 
@@ -194,19 +193,6 @@ export function BoardView({ zoom, setZoom, onOpenEditor }: Props) {
                   onMove={(x, y) =>
                     setNodes((ns) =>
                       ns.map((m) => (m.id === n.id ? { ...m, x, y } : m)),
-                    )
-                  }
-                  onDropComponent={(c: ComponentType) =>
-                    setNodes((ns) =>
-                      ns.map((m) =>
-                        m.id === n.id
-                          ? {
-                              ...m,
-                              state: "ingredient",
-                              components: [...m.components, c],
-                            }
-                          : m,
-                      ),
                     )
                   }
                   zoom={zoom}

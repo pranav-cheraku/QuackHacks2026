@@ -1,7 +1,6 @@
-import { Check, Plus } from "lucide-react";
+import { Check, RefreshCw } from "lucide-react";
 import { useRef } from "react";
-import type { ComponentType, SlideNode } from "@/lib/projektor-data";
-import { SlideThumb } from "./SlideThumb";
+import type { SlideNode, SceneKind, SceneStatus } from "@/lib/projektor-data";
 
 interface Props {
   node: SlideNode;
@@ -9,18 +8,26 @@ interface Props {
   onSelect: () => void;
   onOpenEditor: () => void;
   onMove: (x: number, y: number) => void;
-  onDropComponent: (c: ComponentType) => void;
   zoom: number;
 }
 
-function chipStyle(c: ComponentType): string {
-  if (c === "Header") return "bg-ink text-white border-ink font-bold";
-  if (c === "Stat")
-    return "border-[color:var(--accent-teal)]/40 bg-[color:var(--accent-soft)]/40 text-ink";
-  if (["Image", "Chart", "Video", "Divider"].includes(c))
-    return "bg-canvas/60 border-border text-ink";
-  return "bg-white border-border text-muted-foreground";
-}
+const KIND_LABEL: Record<SceneKind, string> = {
+  title: "TITLE",
+  problem: "PROBLEM",
+  data: "DATA",
+};
+
+const STATUS_LABEL: Record<SceneStatus, string> = {
+  final: "Final",
+  draft: "Draft",
+  "in-review": "In Review",
+};
+
+const STATUS_DOT: Record<SceneStatus, string> = {
+  final: "var(--muted-foreground)",
+  draft: "var(--warn)",
+  "in-review": "var(--accent)",
+};
 
 export function SlideCard({
   node,
@@ -28,12 +35,10 @@ export function SlideCard({
   onSelect,
   onOpenEditor,
   onMove,
-  onDropComponent,
   zoom,
 }: Props) {
   const dragging = useRef<{ ox: number; oy: number } | null>(null);
-  const w = node.width ?? 280;
-  const h = node.height ?? 170;
+  const w = node.width ?? 320;
 
   const onMouseDown = (e: React.MouseEvent) => {
     if ((e.target as HTMLElement).closest("[data-no-drag]")) return;
@@ -61,66 +66,128 @@ export function SlideCard({
   return (
     <div
       className="absolute select-none"
-      style={{
-        left: node.x,
-        top: node.y,
-        width: w,
-      }}
+      style={{ left: node.x, top: node.y, width: w }}
       onMouseDown={onMouseDown}
       onDoubleClick={onOpenEditor}
-      onDragOver={(e) => {
-        e.preventDefault();
-      }}
-      onDrop={(e) => {
-        const c = e.dataTransfer.getData("component") as ComponentType;
-        if (c) onDropComponent(c);
-      }}
     >
       <div
-        className={`relative rounded-md overflow-hidden bg-card shadow-[0_2px_10px_-4px_oklch(0.4_0.01_175/0.2)] transition-all ${
-          selected ? "ring-2 ring-[color:var(--accent-teal)]" : ""
-        } ${node.state === "ingredient" ? "border-2 border-dashed border-border" : "border border-border"}`}
-        style={{ minHeight: h }}
+        className={`rounded-2xl bg-card border transition-all ${
+          selected
+            ? "border-transparent ring-2 ring-[color:var(--accent)] shadow-[var(--sh-v)]"
+            : "border-border shadow-[0_2px_10px_-4px_rgba(40,30,20,0.12)]"
+        }`}
       >
-        {node.state === "rendered" ? (
-          <div style={{ height: h }}>
-            <SlideThumb node={node} />
-          </div>
-        ) : (
-          <div className="p-2.5 flex flex-col gap-1.5">
-            {node.components.length === 0 ? (
-              <div className="text-[10px] text-muted-foreground text-center py-8 font-mono">
-                Drop components here
-              </div>
-            ) : (
-              node.components.map((c, i) => (
-                <div
-                  key={i}
-                  className={`px-2 py-1 text-[10px] rounded-[4px] border ${chipStyle(c)}`}
-                >
-                  {c}
-                </div>
-              ))
-            )}
+        {/* Top row: number · eyebrow · check */}
+        <div className="flex items-center gap-2 px-4 pt-3.5">
+          <span className="inline-flex items-center justify-center w-6 h-6 rounded-md bg-ink text-white font-mono text-[11px] font-semibold shrink-0">
+            {String(node.index).padStart(2, "0")}
+          </span>
+          {node.eyebrow && (
+            <span className="font-mono text-[10px] uppercase tracking-wider text-muted-foreground">
+              {node.eyebrow}
+            </span>
+          )}
+          {node.status === "final" && (
+            <span
+              className="ml-auto inline-flex items-center justify-center w-5 h-5 rounded-full text-white shrink-0"
+              style={{ background: "var(--accent)" }}
+            >
+              <Check size={11} strokeWidth={3} />
+            </span>
+          )}
+        </div>
+
+        {/* Title */}
+        <div className="px-4 pt-2 font-serif text-[22px] leading-[1.12] text-ink">
+          {node.title}
+        </div>
+
+        {/* Preview */}
+        <div className="px-4 pt-3">
+          <Preview node={node} />
+        </div>
+
+        {/* Generate (selected only) */}
+        <div className="px-4 pb-3.5 pt-3 flex justify-end">
+          {selected ? (
             <button
               data-no-drag
-              className="text-muted-foreground hover:text-ink text-[10px] flex items-center justify-center gap-1 py-1 mt-0.5 border border-dashed border-border rounded-[4px] hover:bg-canvas/50"
+              className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md text-[12px] font-semibold transition-opacity hover:opacity-90"
+              style={{
+                background: "var(--accent-soft)",
+                color: "var(--accent)",
+              }}
             >
-              <Plus size={10} /> add
+              <RefreshCw size={12} /> Generate
             </button>
-          </div>
-        )}
-        {node.state === "rendered" && (
-          <div
-            className="absolute top-1.5 right-1.5 flex items-center gap-0.5 text-[8px] font-mono px-1.5 py-0.5 rounded-full bg-white/90 border border-border"
-            style={{ color: "var(--accent-teal)" }}
-          >
-            <Check size={8} strokeWidth={3} /> rendered
-          </div>
-        )}
+          ) : (
+            <div className="h-[26px]" />
+          )}
+        </div>
       </div>
-      <div className="mt-1.5 text-[10px] font-mono text-muted-foreground text-center">
-        {String(node.index).padStart(2, "0")} · {node.title}
+
+      {/* Below card: type label · status pill */}
+      <div className="mt-2 flex items-center justify-between px-1">
+        <span className="font-mono text-[10px] uppercase tracking-wider text-muted-foreground">
+          {KIND_LABEL[node.kind]}
+        </span>
+        <span className="flex items-center gap-1.5 font-mono text-[10px] text-muted-foreground">
+          <span
+            className="w-1.5 h-1.5 rounded-full"
+            style={{ background: STATUS_DOT[node.status] }}
+          />
+          {STATUS_LABEL[node.status]}
+        </span>
+      </div>
+    </div>
+  );
+}
+
+function Preview({ node }: { node: SlideNode }) {
+  if (node.kind === "title") {
+    return (
+      <p className="text-[12.5px] leading-snug text-muted-foreground">
+        {node.body}
+      </p>
+    );
+  }
+
+  if (node.kind === "problem") {
+    return (
+      <div className="space-y-2 py-1">
+        {["w-full", "w-full", "w-4/5", "w-2/3"].map((wd, i) => (
+          <div key={i} className={`h-2 rounded-full bg-canvas ${wd}`} />
+        ))}
+      </div>
+    );
+  }
+
+  // data → bar chart
+  const bars = [38, 54, 72, 96];
+  return (
+    <div>
+      <div className="flex items-end gap-3 h-20">
+        {bars.map((h, i) => (
+          <div
+            key={i}
+            className="flex-1 rounded-md"
+            style={{
+              height: `${h}%`,
+              background:
+                i === bars.length - 1 ? "var(--accent)" : "var(--accent-soft)",
+            }}
+          />
+        ))}
+      </div>
+      <div className="flex gap-3 mt-1.5">
+        {["Q1", "Q2", "Q3", "Q4"].map((q) => (
+          <div
+            key={q}
+            className="flex-1 text-center font-mono text-[9px] text-muted-foreground"
+          >
+            {q}
+          </div>
+        ))}
       </div>
     </div>
   );

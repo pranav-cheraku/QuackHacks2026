@@ -48,6 +48,9 @@ function Projektor() {
   // re-init its history from the loaded deck (fires at most once per project).
   const [deckLoaded, setDeckLoaded] = useState(false);
   const [contentPool, setContentPool] = useState<ContentNode[]>([]);
+  // Incremented each time the user double-clicks into the editor — ensures
+  // EditorView re-materializes the slide root even if startNodeId hasn't changed.
+  const [editorKey, setEditorKey] = useState(0);
   // Tracks the active project ID so saves go to the right Firestore document.
   const [currentProjectId, setCurrentProjectId] = useState<string | null>(projectId ?? null);
   const saveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -162,6 +165,7 @@ function Projektor() {
           projectId={currentProjectId ?? undefined}
           onOpenEditor={(id) => {
             setEditorStart(id);
+            setEditorKey((k) => k + 1);
             setMode("editor");
           }}
         />
@@ -180,6 +184,8 @@ function Projektor() {
           setZoom={setZoom}
           isGridVisible={isGridVisible}
           toggleGrid={toggleGrid}
+          contentPool={contentPool}
+          entryKey={editorKey}
         />
       </div>
     </div>

@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import type { GridPlacement } from './grid';
+import { GRID_COLS, GRID_ROWS, type GridPlacement } from './grid';
 
 // ---------------------------------------------------------------------------
 // Primitives
@@ -82,10 +82,17 @@ export type DiagramSpec = z.infer<typeof DiagramSpecSchema>;
 // ---------------------------------------------------------------------------
 
 export const TextPayloadSchema = z.object({
-  role: z.enum(['claim', 'evidence', 'aside']),
+  // New canonical roles (6 types). Old values kept for backward-compat with stored data.
+  role: z.enum(['header', 'subheader', 'body', 'bullet', 'stat', 'quote', 'claim', 'evidence', 'aside']),
   text: z.string(),
 });
 export type TextPayload = z.infer<typeof TextPayloadSchema>;
+
+export const VideoPayloadSchema = z.object({
+  url: z.string(),
+  caption: z.string().optional(),
+});
+export type VideoPayload = z.infer<typeof VideoPayloadSchema>;
 
 export const DataPayloadSchema = z.object({
   chart: ChartSpecSchema,
@@ -93,29 +100,23 @@ export const DataPayloadSchema = z.object({
 });
 export type DataPayload = z.infer<typeof DataPayloadSchema>;
 
+// Fields shared by every ContentNode variant.
+// sourceRef  — immutable origin: the scene that spawned this node (set by chunker).
+// assignedSceneId — mutable assignment: the scene currently displaying this content
+//                   (set by the user via drag-to-connect in the graph view).
+// graphPosition   — canvas coordinates for the floating card.
+const contentNodeBase = {
+  sourceRef:       z.string().optional(),
+  assignedSceneId: z.string().optional(),
+  graphPosition:   z.object({ x: z.number(), y: z.number() }).optional(),
+} as const;
+
 // Discriminated on `kind` so payload type narrows automatically.
 export const ContentNodeSchema = z.discriminatedUnion('kind', [
-  z.object({
-    id: z.string(),
-    kind: z.literal('text'),
-    payload: TextPayloadSchema,
-    sourceRef: z.string().optional(),
-    graphPosition: z.object({ x: z.number(), y: z.number() }).optional(),
-  }),
-  z.object({
-    id: z.string(),
-    kind: z.literal('image'),
-    payload: ImagePayloadSchema,
-    sourceRef: z.string().optional(),
-    graphPosition: z.object({ x: z.number(), y: z.number() }).optional(),
-  }),
-  z.object({
-    id: z.string(),
-    kind: z.literal('data'),
-    payload: DataPayloadSchema,
-    sourceRef: z.string().optional(),
-    graphPosition: z.object({ x: z.number(), y: z.number() }).optional(),
-  }),
+  z.object({ id: z.string(), kind: z.literal('text'),  payload: TextPayloadSchema,  ...contentNodeBase }),
+  z.object({ id: z.string(), kind: z.literal('image'), payload: ImagePayloadSchema, ...contentNodeBase }),
+  z.object({ id: z.string(), kind: z.literal('video'), payload: VideoPayloadSchema, ...contentNodeBase }),
+  z.object({ id: z.string(), kind: z.literal('data'),  payload: DataPayloadSchema,  ...contentNodeBase }),
 ]);
 export type ContentNode = z.infer<typeof ContentNodeSchema>;
 
@@ -224,6 +225,8 @@ export type LayoutNode =
       zIndex?: number;
       opacity?: number;
       rotation?: number;
+      /** Back-reference to the ContentNode in the pool that this leaf was materialized from. */
+      contentNodeId?: string;
     };
 
 export type LeafNode  = Extract<LayoutNode, { kind: 'leaf' }>;
@@ -250,6 +253,7 @@ export const LayoutNodeSchema: z.ZodType<LayoutNode> = z.lazy(() =>
       zIndex: z.number().optional(),
       opacity: z.number().optional(),
       rotation: z.number().optional(),
+      contentNodeId: z.string().optional(),
     }),
   ])
 );
@@ -285,6 +289,9 @@ export const SceneSchema = z.object({
   root: LayoutNodeSchema.optional(),
   cachedAt: z.string().optional(),
   spokenTrack: z.string().optional(),
+  /** IDs of ContentNodes currently assigned to this scene. Derived from AssignmentEdge
+   *  but also stored here for O(1) lookup without scanning the full assignments array. */
+  assignedContentIds: z.array(z.string()).optional(),
 });
 export type Scene = z.infer<typeof SceneSchema>;
 
@@ -489,6 +496,191 @@ export function collectLeaves(root: LayoutNode): LeafNode[] {
 
 export function emptyRoot(id: string): StackNode {
   return { kind: 'stack', id: `root-${id}`, dir: 'col', gap: 0, children: [] };
+}
+
+// ---------------------------------------------------------------------------
+// Content-node → slide materialization
+// Converts the assigned ContentNodes for a scene into a flat LayoutNode tree
+// that the slide renderer can display. This is the "IR as source of truth"
+// rendering path: the EditorView calls this whenever it enters a slide that
+// has content assigned, so the layout is always derived from the pool.
+// ---------------------------------------------------------------------------
+
+// Placement constants relative to the 10 000 × 5 625 grid (see grid.ts).
+const MAT_COL_START = Math.round(GRID_COLS * 0.06);   // ~600  — 6% left margin
+const MAT_COL_SPAN  = Math.round(GRID_COLS * 0.88);   // ~8800 — 88% width
+const MAT_ROW_START = Math.round(GRID_ROWS * 0.07);   // ~394  — 7% top margin
+const MAT_ROW_TOTAL = Math.round(GRID_ROWS * 0.85);   // ~4781 — usable height
+const MAT_ROW_GAP   = Math.round(GRID_ROWS * 0.025);  // ~140  — gap between items
+// When a title is present, it occupies a compact header band and content starts below it.
+const MAT_TITLE_ROW_SPAN    = Math.round(GRID_ROWS * 0.13);  // ~731  — compact title height
+const MAT_CONTENT_ROW_START = Math.round(GRID_ROWS * 0.24);  // ~1350 — content top when title present
+const MAT_CONTENT_ROW_TOTAL = Math.round(GRID_ROWS * 0.68);  // ~3825 — content height when title present
+
+const TEXT_STYLE_MAP: Partial<Record<TextPayload['role'], Partial<TextBlockStyle>>> = {
+  header:    { fontSize: 72, fontWeight: 700, lineHeight: 1.1 },
+  subheader: { fontSize: 48, fontWeight: 600, lineHeight: 1.2 },
+  body:      { fontSize: 32, fontWeight: 400, lineHeight: 1.4 },
+  bullet:    { fontSize: 28, fontWeight: 400, lineHeight: 1.6 },
+  stat:      { fontSize: 96, fontWeight: 800, lineHeight: 1.0 },
+  quote:     { fontSize: 32, fontWeight: 400, fontStyle: 'italic', lineHeight: 1.4 },
+  // backward-compat aliases
+  claim:     { fontSize: 72, fontWeight: 700, lineHeight: 1.1 },
+  evidence:  { fontSize: 32, fontWeight: 400, lineHeight: 1.4 },
+  aside:     { fontSize: 28, fontWeight: 400, fontStyle: 'italic', lineHeight: 1.4 },
+};
+
+function contentNodeToLeaf(cn: ContentNode, placement: GridPlacement): LeafNode {
+  if (cn.kind === 'image') {
+    return {
+      kind: 'leaf',
+      id: makeLeafId(),
+      contentNodeId: cn.id,
+      placement,
+      block: { role: 'image', src: cn.payload.url },
+      zIndex: 1,
+      opacity: 1,
+      rotation: 0,
+    };
+  }
+  if (cn.kind === 'video') {
+    // Render as a text label in the slide (full video embed out of scope for hackathon).
+    const vp = cn.payload as VideoPayload;
+    const style: TextBlockStyle = {
+      fontSize: 28, fontWeight: 400, fontStyle: 'italic',
+      textDecoration: 'none', textAlign: 'center',
+      color: 'oklch(0.54 0.105 192)', lineHeight: 1.4,
+    };
+    return {
+      kind: 'leaf',
+      id: makeLeafId(),
+      contentNodeId: cn.id,
+      placement,
+      block: { role: 'text', text: `▶ ${vp.url || 'Video'}`, style },
+      zIndex: 1,
+      opacity: 1,
+      rotation: 0,
+    };
+  }
+  const payload = cn.payload as TextPayload;
+  const style: TextBlockStyle = {
+    fontSize: 32,
+    fontWeight: 400,
+    fontStyle: 'normal',
+    textDecoration: 'none',
+    textAlign: 'left',
+    color: 'oklch(0.24 0.009 185)',
+    lineHeight: 1.3,
+    ...TEXT_STYLE_MAP[payload.role],
+  };
+  return {
+    kind: 'leaf',
+    id: makeLeafId(),
+    contentNodeId: cn.id,
+    placement,
+    block: { role: 'text', text: payload.text, style },
+    zIndex: 1,
+    opacity: 1,
+    rotation: 0,
+  };
+}
+
+export function makeTitleOnlyRoot(sceneId: string, title: string): StackNode {
+  return {
+    kind: 'stack',
+    id: `root-${sceneId}`,
+    dir: 'col',
+    gap: 0,
+    children: [
+      {
+        kind: 'leaf',
+        id: makeLeafId(),
+        placement: {
+          col:     Math.round(GRID_COLS * 0.06),
+          row:     Math.round(GRID_ROWS * 0.20),
+          colSpan: Math.round(GRID_COLS * 0.88),
+          rowSpan: Math.round(GRID_ROWS * 0.45),
+        },
+        block: {
+          role: 'text',
+          text: title,
+          style: {
+            fontSize: 72,
+            fontWeight: 700,
+            fontStyle: 'normal',
+            textDecoration: 'none',
+            textAlign: 'left',
+            color: 'oklch(0.24 0.009 185)',
+            lineHeight: 1.1,
+          },
+        },
+        zIndex: 1,
+        opacity: 1,
+        rotation: 0,
+      },
+    ],
+  };
+}
+
+export function materializeContentNodes(
+  contentNodes: ContentNode[],
+  sceneId: string,
+  title?: string,
+): StackNode {
+  const children: LeafNode[] = [];
+
+  if (title) {
+    children.push({
+      kind: 'leaf',
+      id: makeLeafId(),
+      placement: {
+        col:     MAT_COL_START,
+        row:     MAT_ROW_START,
+        colSpan: MAT_COL_SPAN,
+        rowSpan: MAT_TITLE_ROW_SPAN,
+      },
+      block: {
+        role: 'text',
+        text: title,
+        style: {
+          fontSize: 60,
+          fontWeight: 700,
+          fontStyle: 'normal',
+          textDecoration: 'none',
+          textAlign: 'left',
+          color: 'oklch(0.24 0.009 185)',
+          lineHeight: 1.1,
+        },
+      },
+      zIndex: 1,
+      opacity: 1,
+      rotation: 0,
+    });
+  }
+
+  const n = contentNodes.length;
+  const rowStart = title ? MAT_CONTENT_ROW_START : MAT_ROW_START;
+  const rowTotal = title ? MAT_CONTENT_ROW_TOTAL : MAT_ROW_TOTAL;
+  const totalGap = MAT_ROW_GAP * Math.max(0, n - 1);
+  const rowPerItem = n > 0 ? Math.floor((rowTotal - totalGap) / n) : rowTotal;
+
+  contentNodes.forEach((cn, i) => {
+    const row = rowStart + i * (rowPerItem + MAT_ROW_GAP);
+    children.push(contentNodeToLeaf(cn, {
+      col:     MAT_COL_START,
+      row,
+      colSpan: MAT_COL_SPAN,
+      rowSpan: rowPerItem,
+    }));
+  });
+
+  return {
+    kind: 'stack',
+    id: `root-${sceneId}`,
+    dir: 'col',
+    gap: 0,
+    children,
+  };
 }
 
 export function deepCloneWithNewIds(root: LayoutNode): LayoutNode {

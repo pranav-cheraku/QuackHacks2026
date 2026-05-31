@@ -1,6 +1,7 @@
 import { Check } from "lucide-react";
 import { useEffect, useRef } from "react";
 import type { SlideNode, SceneKind, SceneStatus } from "@/lib/projektor-data";
+import type { ContentNode, TextPayload } from "@/lib/ir";
 
 interface Props {
   node: SlideNode;
@@ -14,6 +15,8 @@ interface Props {
   /** Reports the card's real rendered height so edges anchor flush to it. */
   onMeasure?: (height: number) => void;
   zoom: number;
+  /** ContentNodes currently assigned to this slide — drives the graph preview. */
+  connectedContent?: ContentNode[];
 }
 
 const KIND_LABEL: Record<SceneKind, string> = {
@@ -44,6 +47,7 @@ export function SlideCard({
   onMove,
   onMeasure,
   zoom,
+  connectedContent,
 }: Props) {
   const dragging = useRef<{ ox: number; oy: number } | null>(null);
   const w = node.width ?? 320;
@@ -135,7 +139,7 @@ export function SlideCard({
 
         {/* Preview */}
         <div className="px-4 pt-3 pb-4">
-          <Preview node={node} />
+          <Preview node={node} connectedContent={connectedContent} />
         </div>
       </div>
 
@@ -156,52 +160,57 @@ export function SlideCard({
   );
 }
 
-function Preview({ node }: { node: SlideNode }) {
-  if (node.kind === "title") {
-    return (
-      <p className="text-[12.5px] leading-snug text-muted-foreground">
-        {node.body}
-      </p>
-    );
-  }
+const ROLE_CHIP: Partial<Record<TextPayload["role"], string>> = {
+  header:    "H1",
+  subheader: "H2",
+  body:      "Body",
+  bullet:    "List",
+  stat:      "Stat",
+  quote:     "Quote",
+  // backward compat
+  claim:     "H1",
+  evidence:  "Body",
+  aside:     "Quote",
+};
 
-  if (node.kind === "problem") {
-    return (
-      <div className="space-y-2 py-1">
-        {["w-full", "w-full", "w-4/5", "w-2/3"].map((wd, i) => (
-          <div key={i} className={`h-2 rounded-full bg-canvas ${wd}`} />
-        ))}
-      </div>
-    );
-  }
+function contentLabel(cn: ContentNode): string {
+  if (cn.kind === "image") return "Image";
+  if (cn.kind === "video") return "Video";
+  if (cn.kind === "data")  return "Chart";
+  return ROLE_CHIP[(cn.payload as TextPayload).role] ?? "Text";
+}
 
-  // data → bar chart
-  const bars = [38, 54, 72, 96];
-  return (
-    <div>
-      <div className="flex items-end gap-3 h-20">
-        {bars.map((h, i) => (
-          <div
-            key={i}
-            className="flex-1 rounded-md"
-            style={{
-              height: `${h}%`,
-              background:
-                i === bars.length - 1 ? "var(--accent)" : "var(--accent-soft)",
-            }}
-          />
-        ))}
-      </div>
-      <div className="flex gap-3 mt-1.5">
-        {["Q1", "Q2", "Q3", "Q4"].map((q) => (
-          <div
-            key={q}
-            className="flex-1 text-center font-mono text-[9px] text-muted-foreground"
-          >
-            {q}
+function contentPreview(cn: ContentNode): string {
+  if (cn.kind === "image") return (cn.payload as { url: string }).url ? "Image" : "Image (empty)";
+  if (cn.kind === "video") return (cn.payload as { url: string }).url || "Video";
+  if (cn.kind === "data")  return "Chart";
+  const text = (cn.payload as TextPayload).text;
+  return text.length > 44 ? text.slice(0, 44) + "…" : text;
+}
+
+function Preview({ node, connectedContent }: { node: SlideNode; connectedContent?: ContentNode[] }) {
+  if (connectedContent && connectedContent.length > 0) {
+    return (
+      <div className="space-y-1.5 py-0.5">
+        {connectedContent.slice(0, 5).map((cn) => (
+          <div key={cn.id} className="flex items-baseline gap-2 min-w-0">
+            <span className="shrink-0 font-mono text-[9px] font-semibold uppercase tracking-wide text-[color:var(--accent)] bg-[color:var(--accent-soft)] px-1.5 py-0.5 rounded-sm">
+              {contentLabel(cn)}
+            </span>
+            <span className="text-[11px] text-muted-foreground leading-snug truncate">
+              {contentPreview(cn)}
+            </span>
           </div>
         ))}
+        {connectedContent.length > 5 && (
+          <span className="text-[10px] text-muted-foreground pl-0.5">
+            +{connectedContent.length - 5} more
+          </span>
+        )}
       </div>
-    </div>
-  );
+    );
+  }
+
+  // No content connected — blank preview for all slide kinds
+  return null;
 }

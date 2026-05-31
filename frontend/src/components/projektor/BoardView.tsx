@@ -14,7 +14,7 @@ import { AddContent } from "./AddContent";
 import { SlideCard } from "./SlideCard";
 import { ContentNodeCard } from "./ContentNodeCard";
 import { ContentNodePanel } from "./ContentNodePanel";
-import type { ContentNode } from "@/lib/ir";
+import type { ContentNode, TextPayload } from "@/lib/ir";
 import {
   INITIAL_NODES,
   INITIAL_EDGES,
@@ -247,6 +247,18 @@ export function BoardView({
   // Edge selection/hover (by index) for deleting a single connection.
   const [selectedEdge, setSelectedEdge] = useState<number | null>(null);
   const [hoverEdge, setHoverEdge] = useState<number | null>(null);
+  // Assignment edges (content → slide): keyed by contentNode.id.
+  const [selectedAssignment, setSelectedAssignment] = useState<string | null>(null);
+  const [hoverAssignment, setHoverAssignment] = useState<string | null>(null);
+  const [contentHeights, setContentHeights] = useState<Record<string, number>>({});
+  const reportContentHeight = (id: string, h: number) =>
+    setContentHeights((prev) => (prev[id] === h ? prev : { ...prev, [id]: h }));
+  // Live rubber-band state while dragging a content→slide wire.
+  const [rewireContent, setRewireContent] = useState<{
+    contentId: string;
+    cursor: { x: number; y: number };
+    hover: string | null;
+  } | null>(null);
   const panRef = useRef<{ x: number; y: number } | null>(null);
   const selBoxOriginRef = useRef<{ cx: number; cy: number } | null>(null);
   const viewportRef = useRef<HTMLDivElement>(null);
@@ -306,6 +318,8 @@ export function BoardView({
     onNodesChangeRef.current?.(nodes, edges);
     if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
     saveTimerRef.current = setTimeout(() => {
+      // HOTFIX: merge conflict here. choose which one. 
+      saveDeck(currentUser.uid, nodes, edges, contentPool ?? []).catch((err) =>
       saveDeck(currentUser.uid, projectId, nodes, edges).catch((err) =>
         console.error("[BoardView] Failed to save deck:", err),
       );
@@ -314,6 +328,7 @@ export function BoardView({
       if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [nodes, edges, contentPool, currentUser]); // // HOTFIX: merge conflict here. choose which one. 
   }, [nodes, edges, currentUser, projectId]);
 
   const findNode = (id: string) => nodes.find((n) => n.id === id)!;
@@ -351,6 +366,12 @@ export function BoardView({
     const w = child.width ?? 320;
     return { x: child.x + (w * (k + 1)) / (list.length + 1), y: child.y };
   };
+
+  // Anchor points for content nodes (their top-center, for the assignment wire).
+  const contentTopAnchor = (cn: ContentNode) => ({
+    x: (cn.graphPosition?.x ?? 0) + 110,
+    y: cn.graphPosition?.y ?? 0,
+  });
 
   // Selecting a node. additive=true (shift-click) toggles membership in the
   // multi-selection. A plain click focuses it in the inspector. Either way it
@@ -585,6 +606,7 @@ export function BoardView({
       setSelectedIds(new Set());
       setSelectedEdge(null);
       setSelectedContentId(null);
+      setSelectedAssignment(null);
       panRef.current = { x: e.clientX - pan.x, y: e.clientY - pan.y };
       const move = (ev: MouseEvent) => {
         if (!panRef.current) return;
@@ -771,6 +793,34 @@ export function BoardView({
     return () => window.removeEventListener("keydown", onKey);
   }, [selectedEdge]);
 
+  // Delete/Backspace removes the selected assignment edge (content → slide).
+  useEffect(() => {
+    if (!selectedAssignment) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== "Delete" && e.key !== "Backspace") return;
+      if (!viewportRef.current?.offsetParent) return;
+      const t = e.target as HTMLElement | null;
+      if (t && (t.tagName === "INPUT" || t.tagName === "TEXTAREA" || t.isContentEditable)) return;
+      e.preventDefault();
+      const unassigned = (contentPool ?? []).find((c) => c.id === selectedAssignment);
+      const oldSceneId = unassigned?.assignedSceneId ?? unassigned?.sourceRef;
+      onContentPoolChange?.((contentPool ?? []).map((c) =>
+        c.id === selectedAssignment ? { ...c, assignedSceneId: undefined, sourceRef: undefined } : c,
+      ));
+      if (oldSceneId) {
+        setNodes((ns) => ns.map((n) =>
+          n.id === oldSceneId
+            ? { ...n, assignedContentIds: (n.assignedContentIds ?? []).filter((id) => id !== selectedAssignment) }
+            : n,
+        ));
+      }
+      setSelectedAssignment(null);
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedAssignment, contentPool]);
+
   // Screen (client) point → canvas coords, inverting the pan/zoom transform.
   const toCanvas = (clientX: number, clientY: number) => {
     const vp = viewportRef.current!;
@@ -851,6 +901,57 @@ export function BoardView({
         }
       }
       setRewire(null);
+    };
+
+    window.addEventListener("mousemove", move);
+    window.addEventListener("mouseup", up);
+  };
+
+  // Drag a wire from a content node's top port to a slide node to assign it.
+  // Dropping on a slide sets/replaces contentNode.assignedSceneId. Only slide nodes
+  // (those in `nodes`) are valid targets; content nodes are not.
+  const beginContentWire = (contentId: string, e: React.MouseEvent) => {
+    e.stopPropagation();
+    e.preventDefault();
+    setSelectedAssignment(null);
+
+    const slideIds = new Set(nodes.map((n) => n.id));
+    const slideIdAt = (clientX: number, clientY: number): string | null => {
+      const el = document.elementFromPoint(clientX, clientY) as HTMLElement | null;
+      const id = el?.closest<HTMLElement>("[data-node-id]")?.dataset.nodeId ?? null;
+      return id && slideIds.has(id) ? id : null;
+    };
+
+    setRewireContent({ contentId, cursor: toCanvas(e.clientX, e.clientY), hover: null });
+
+    const move = (ev: MouseEvent) =>
+      setRewireContent((r) =>
+        r ? { ...r, cursor: toCanvas(ev.clientX, ev.clientY), hover: slideIdAt(ev.clientX, ev.clientY) } : r,
+      );
+
+    const up = (ev: MouseEvent) => {
+      window.removeEventListener("mousemove", move);
+      window.removeEventListener("mouseup", up);
+      const target = slideIdAt(ev.clientX, ev.clientY);
+      if (target) {
+        const pool = contentPool ?? [];
+        const cn = pool.find((c) => c.id === contentId);
+        const oldSceneId = cn?.assignedSceneId ?? cn?.sourceRef;
+        // Update contentPool: set assignedSceneId on the dragged node.
+        onContentPoolChange?.(pool.map((c) => (c.id === contentId ? { ...c, assignedSceneId: target } : c)));
+        // Keep SlideNode.assignedContentIds in sync on both the old and new target slides.
+        setNodes((ns) => ns.map((n) => {
+          if (n.id === oldSceneId && oldSceneId !== target) {
+            return { ...n, assignedContentIds: (n.assignedContentIds ?? []).filter((id) => id !== contentId) };
+          }
+          if (n.id === target) {
+            const existing = n.assignedContentIds ?? [];
+            return existing.includes(contentId) ? n : { ...n, assignedContentIds: [...existing, contentId] };
+          }
+          return n;
+        }));
+      }
+      setRewireContent(null);
     };
 
     window.addEventListener("mousemove", move);
@@ -1000,6 +1101,64 @@ export function BoardView({
                 />
               );
             })}
+
+            {/* Assignment edges — content node top → assigned slide bottom */}
+            {(contentPool ?? []).map((cn) => {
+              const assignedId = cn.assignedSceneId ?? cn.sourceRef;
+              if (!assignedId) return null;
+              const target = nodes.find((n) => n.id === assignedId);
+              if (!target) return null;
+              const a = contentTopAnchor(cn);
+              const b = anchorOf(target, "bottom");
+              const isActive = selectedAssignment === cn.id || hoverAssignment === cn.id;
+              const d = buildPath(a, b);
+              return (
+                <g key={`assign-${cn.id}`}>
+                  <path
+                    d={d}
+                    fill="none"
+                    stroke="var(--accent)"
+                    strokeOpacity={isActive ? 0.9 : 0.45}
+                    strokeWidth={isActive ? 2.5 : 1.5}
+                    strokeDasharray="4 3"
+                    markerEnd="url(#arrowhead)"
+                  />
+                  {/* Invisible hit-area */}
+                  <path
+                    d={d}
+                    fill="none"
+                    stroke="transparent"
+                    strokeWidth={18}
+                    style={{ pointerEvents: "stroke", cursor: "pointer" }}
+                    onMouseEnter={() => setHoverAssignment(cn.id)}
+                    onMouseLeave={() => setHoverAssignment((h) => (h === cn.id ? null : h))}
+                    onMouseDown={(ev) => ev.stopPropagation()}
+                    onClick={(ev) => {
+                      ev.stopPropagation();
+                      setSelectedEdge(null);
+                      setSelectedAssignment((prev) => (prev === cn.id ? null : cn.id));
+                    }}
+                  />
+                </g>
+              );
+            })}
+
+            {/* Rubber-band while dragging a content wire */}
+            {rewireContent && (() => {
+              const cn = (contentPool ?? []).find((c) => c.id === rewireContent.contentId);
+              if (!cn) return null;
+              return (
+                <path
+                  d={buildPath(contentTopAnchor(cn), rewireContent.cursor)}
+                  fill="none"
+                  stroke="var(--accent)"
+                  strokeOpacity={0.75}
+                  strokeWidth="1.75"
+                  strokeDasharray="5 3"
+                  markerEnd="url(#arrowhead)"
+                />
+              );
+            })()}
           </svg>
 
           {/* Edge relation labels — hidden on the edge being hovered/selected,
@@ -1053,12 +1212,57 @@ export function BoardView({
               );
             })}
 
+          {/* Delete-assignment × — midpoint of hovered/selected assignment edge */}
+          {!rewireContent &&
+            (contentPool ?? []).map((cn) => {
+              const assignedId = cn.assignedSceneId ?? cn.sourceRef;
+              if (!assignedId) return null;
+              if (hoverAssignment !== cn.id && selectedAssignment !== cn.id) return null;
+              const target = nodes.find((n) => n.id === assignedId);
+              if (!target) return null;
+              const a = contentTopAnchor(cn);
+              const b = anchorOf(target, "bottom");
+              return (
+                <button
+                  key={`assign-x-${cn.id}`}
+                  type="button"
+                  title="Remove assignment"
+                  onMouseEnter={() => setHoverAssignment(cn.id)}
+                  onMouseLeave={() => setHoverAssignment((h) => (h === cn.id ? null : h))}
+                  onMouseDown={(ev) => ev.stopPropagation()}
+                  onClick={(ev) => {
+                    ev.stopPropagation();
+                    onContentPoolChange?.((contentPool ?? []).map((c) =>
+                      c.id === cn.id ? { ...c, assignedSceneId: undefined, sourceRef: undefined } : c,
+                    ));
+                    setNodes((ns) => ns.map((n) =>
+                      n.id === assignedId
+                        ? { ...n, assignedContentIds: (n.assignedContentIds ?? []).filter((id) => id !== cn.id) }
+                        : n,
+                    ));
+                    setSelectedAssignment(null);
+                    setHoverAssignment(null);
+                  }}
+                  className="absolute -translate-x-1/2 -translate-y-1/2 flex items-center justify-center w-[22px] h-[22px] rounded-full bg-white border border-border shadow-[var(--sh-v)] text-muted-foreground hover:text-red-500 hover:border-red-300 transition-colors"
+                  style={{ left: (a.x + b.x) / 2, top: (a.y + b.y) / 2 }}
+                >
+                  <X size={12} strokeWidth={2.5} />
+                </button>
+              );
+            })}
+
           {/* Nodes */}
           {nodes.map((n) => {
             const onMove = (x: number, y: number) =>
               setNodes((ns) =>
                 ns.map((m) => (m.id === n.id ? { ...m, x, y } : m)),
               );
+            const connectedContent = (contentPool ?? []).filter(
+              (cn) =>
+                n.assignedContentIds?.includes(cn.id) ||
+                cn.assignedSceneId === n.id ||
+                (!cn.assignedSceneId && cn.sourceRef === n.id),
+            );
             return (
               <div key={n.id} data-node data-node-id={n.id} className="group">
                 {n.ghost ? (
@@ -1066,7 +1270,7 @@ export function BoardView({
                     node={n}
                     selected={selectedIds.has(n.id)}
                     dimmed={isNodeDimmed(n)}
-                    dropTarget={rewire?.hover === n.id}
+                    dropTarget={rewire?.hover === n.id || rewireContent?.hover === n.id}
                     onSelect={() => selectNode(n.id)}
                     onMove={onMove}
                     onAccept={() => acceptGhost(n.id)}
@@ -1081,12 +1285,13 @@ export function BoardView({
                     node={n}
                     selected={selectedIds.has(n.id)}
                     dimmed={isNodeDimmed(n)}
-                    dropTarget={rewire?.hover === n.id}
+                    dropTarget={rewire?.hover === n.id || rewireContent?.hover === n.id}
                     onSelect={(shift) => selectNode(n.id, shift)}
                     onOpenEditor={() => onOpenEditor(n.id)}
                     onMove={onMove}
                     onMeasure={(h) => reportHeight(n.id, h)}
                     zoom={zoom}
+                    connectedContent={connectedContent.length > 0 ? connectedContent : undefined}
                   />
                 )}
                 {/* Connect port — appears on hover; drag to draw a new arrow
@@ -1125,6 +1330,7 @@ export function BoardView({
                 setSelected(null);
                 setSelectedIds(new Set());
                 setSelectedContentId(cn.id);
+                setSelectedAssignment(null);
               }}
               onMove={(x, y) => {
                 onContentPoolChange?.(
@@ -1133,6 +1339,8 @@ export function BoardView({
                   ),
                 );
               }}
+              onMeasure={(h) => reportContentHeight(cn.id, h)}
+              onBeginWire={(e) => beginContentWire(cn.id, e)}
             />
           ))}
 
@@ -1318,10 +1526,16 @@ export function BoardView({
                 const centerY = (viewportRef.current
                   ? viewportRef.current.clientHeight / 2
                   : 300) / zoom - pan.y / zoom;
+                const TYPE_TO_ROLE: Record<string, TextPayload["role"]> = {
+                  Header: "header", Subheader: "subheader", Body: "body",
+                  List: "bullet", Stat: "stat", Quote: "quote",
+                };
                 const newNode: ContentNode =
                   draft.type === "Image"
                     ? { id, kind: "image", payload: { url: draft.src ?? "", caption: draft.label } }
-                    : { id, kind: "text", payload: { role: "claim", text: draft.label } };
+                    : draft.type === "Video"
+                    ? { id, kind: "video", payload: { url: draft.url ?? "" } }
+                    : { id, kind: "text", payload: { role: TYPE_TO_ROLE[draft.type] ?? "body", text: draft.text ?? draft.label } };
                 onContentPoolChange([
                   ...(contentPool ?? []),
                   { ...newNode, graphPosition: { x: centerX, y: centerY } },

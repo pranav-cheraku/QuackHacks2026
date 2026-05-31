@@ -1,10 +1,13 @@
-import { createFileRoute } from "@tanstack/react-router";
+import { createFileRoute, redirect } from "@tanstack/react-router";
 import { useState } from "react";
 import { TopBar } from "@/components/projektor/TopBar";
 import { BoardView } from "@/components/projektor/BoardView";
 import { EditorView } from "@/components/projektor/EditorView";
 
 export const Route = createFileRoute("/")({
+  beforeLoad: () => {
+    throw redirect({ to: "/signin" });
+  },
   head: () => ({
     meta: [
       { title: "Projektor — Board + Editor" },

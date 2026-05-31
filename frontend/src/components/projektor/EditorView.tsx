@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, useCallback } from "react";
+import { useState, useEffect, useRef, useCallback, useReducer } from "react";
 import type React from "react";
 import {
   Undo2, Redo2, Bold, Italic, Underline,
@@ -18,19 +18,56 @@ import { gridToCSS, GRID_COLS, GRID_ROWS, snap, SNAP_STEP } from "@/lib/grid";
 import type { GridPlacement } from "@/lib/grid";
 import { SLIDE_ELEMENTS } from "@/lib/initial-slides";
 
+// ─── Undo/redo history ────────────────────────────────────────────────────────
+type History = { past: SlideNode[][]; present: SlideNode[]; future: SlideNode[][] };
+type HistoryAction =
+  | { type: "commit"; updater: (s: SlideNode[]) => SlideNode[] }
+  | { type: "undo" }
+  | { type: "redo" };
+
+function historyReducer(state: History, action: HistoryAction): History {
+  switch (action.type) {
+    case "commit":
+      return {
+        past: [...state.past.slice(-49), state.present],
+        present: action.updater(state.present),
+        future: [],
+      };
+    case "undo":
+      if (!state.past.length) return state;
+      return {
+        past: state.past.slice(0, -1),
+        present: state.past[state.past.length - 1],
+        future: [state.present, ...state.future.slice(0, 49)],
+      };
+    case "redo":
+      if (!state.future.length) return state;
+      return {
+        past: [...state.past.slice(-49), state.present],
+        present: state.future[0],
+        future: state.future.slice(1),
+      };
+  }
+}
+
 interface Props { startNodeId: string | null; }
 type RightTab = "agent" | "design" | "arrange";
 type HandlePos = "n" | "ne" | "e" | "se" | "s" | "sw" | "w" | "nw";
 
 // ─── EditorView ───────────────────────────────────────────────────────────────
 export function EditorView({ startNodeId }: Props) {
-  const [slides, setSlides] = useState<SlideNode[]>(() =>
-    INITIAL_NODES.map((n) => ({
-      ...n,
-      // Seed with pre-built elements for initial slides; fall back to empty
-      elements: (n.elements?.length ? n.elements : null) ?? SLIDE_ELEMENTS[n.id] ?? [],
-    }))
+  const [{ past, present: slides, future }, dispatch] = useReducer(
+    historyReducer,
+    null,
+    (): History => ({
+      past: [],
+      present: INITIAL_NODES.map((n) => ({ ...n, elements: SLIDE_ELEMENTS[n.id] ?? [] })),
+      future: [],
+    })
   );
+  const canUndo = past.length > 0;
+  const canRedo = future.length > 0;
+
   const [activeId, setActiveId] = useState(startNodeId ?? "n1");
   const [selectedElId, setSelectedElId] = useState<string | null>(null);
   const [editingElId, setEditingElId] = useState<string | null>(null);
@@ -44,9 +81,12 @@ export function EditorView({ startNodeId }: Props) {
   // ── Helpers ──────────────────────────────────────────────────────────────
   const updateSlide = useCallback(
     (slideId: string, fn: (s: SlideNode) => SlideNode) =>
-      setSlides((prev) => prev.map((s) => (s.id === slideId ? fn(s) : s))),
+      dispatch({ type: "commit", updater: (prev) => prev.map((s) => (s.id === slideId ? fn(s) : s)) }),
     []
   );
+
+  const undo = useCallback(() => dispatch({ type: "undo" }), []);
+  const redo = useCallback(() => dispatch({ type: "redo" }), []);
 
   const updateEl = useCallback(
     (elId: string, fn: (e: SlideElement) => SlideElement) =>
@@ -105,7 +145,7 @@ export function EditorView({ startNodeId }: Props) {
       thumb: "title",
       elements: [],
     };
-    setSlides((prev) => [...prev, newSlide]);
+    dispatch({ type: "commit", updater: (prev) => [...prev, newSlide] });
     setActiveId(newSlide.id);
     setSelectedElId(null);
   };
@@ -113,6 +153,12 @@ export function EditorView({ startNodeId }: Props) {
   // ── Keyboard shortcuts ────────────────────────────────────────────────────
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
+      if ((e.metaKey || e.ctrlKey) && e.key === "z" && !e.shiftKey) {
+        e.preventDefault(); undo(); return;
+      }
+      if ((e.metaKey || e.ctrlKey) && (e.key === "y" || (e.key === "z" && e.shiftKey))) {
+        e.preventDefault(); redo(); return;
+      }
       if (editingElId) return;
       if (!selectedElId) return;
       const tag = (e.target as HTMLElement).tagName;
@@ -126,7 +172,7 @@ export function EditorView({ startNodeId }: Props) {
     };
     window.addEventListener("keydown", handler);
     return () => window.removeEventListener("keydown", handler);
-  }, [selectedElId, editingElId, deleteEl, duplicateEl]);
+  }, [selectedElId, editingElId, deleteEl, duplicateEl, undo, redo]);
 
   const commitMove   = (id: string, p: GridPlacement) => updateEl(id, (e) => ({ ...e, placement: p }));
   const commitResize = (id: string, p: GridPlacement) => updateEl(id, (e) => ({ ...e, placement: p }));
@@ -148,8 +194,8 @@ export function EditorView({ startNodeId }: Props) {
         className="h-10 border-b border-border bg-chrome flex items-center px-3 gap-1 shrink-0 text-[12px]"
         onClick={(e) => e.stopPropagation()}
       >
-        <ToolBtn><Undo2 size={13} /></ToolBtn>
-        <ToolBtn><Redo2 size={13} /></ToolBtn>
+        <ToolBtn title="Undo (Ctrl+Z)" dimmed={!canUndo} onClick={undo}><Undo2 size={13} /></ToolBtn>
+        <ToolBtn title="Redo (Ctrl+Y)" dimmed={!canRedo} onClick={redo}><Redo2 size={13} /></ToolBtn>
         <Sep />
         <Select label={selectedEl?.text ? `${selectedEl.text.fontSize}px` : "Size"} />
         <Sep />
@@ -873,14 +919,21 @@ function ArrangePanel({ el, onChange, onBringForward, onSendBack }: ArrangePanel
 }
 
 // ─── Shared micro-components ──────────────────────────────────────────────────
-function ToolBtn({ children, title, active, onClick }: { children: React.ReactNode; title?: string; active?: boolean; onClick?: () => void }) {
+function ToolBtn({ children, title, active, dimmed, onClick }: {
+  children: React.ReactNode;
+  title?: string;
+  active?: boolean;
+  dimmed?: boolean;
+  onClick?: () => void;
+}) {
   return (
     <button
       title={title}
       onClick={onClick}
+      disabled={dimmed}
       className={`w-7 h-7 flex items-center justify-center rounded transition-colors ${
         active ? "bg-canvas text-ink" : "text-muted-foreground hover:text-ink hover:bg-canvas/60"
-      }`}
+      } ${dimmed ? "opacity-30 cursor-default" : ""}`}
     >
       {children}
     </button>

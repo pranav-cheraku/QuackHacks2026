@@ -375,6 +375,7 @@ export function BoardView({
   // drops any edge selection (node and edge selection are mutually exclusive).
   const selectNode = (id: string, additive = false) => {
     setSelectedEdge(null);
+    setSelectedContentId(null);
     if (additive) {
       setSelectedIds((prev) => {
         const next = new Set(prev);
@@ -1491,6 +1492,7 @@ export function BoardView({
           })()
         ) : inspectorOpen ? (
           <ScenePanel
+            key={selected ?? "none"}
             node={selectedNode}
             selectedCount={selectedIds.size}
             parentRelation={parentEdge?.relation ?? null}

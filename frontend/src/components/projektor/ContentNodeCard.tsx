@@ -27,14 +27,14 @@ const ROLE_LABEL: Record<TextPayload["role"], string> = {
 };
 
 const ROLE_TEXT_CLASS: Record<TextPayload["role"], string> = {
-  header:    "text-[16px] font-bold leading-tight text-ink",
-  subheader: "text-[14px] font-semibold leading-tight text-ink",
+  header:    "text-[14px] font-medium leading-tight text-ink",
+  subheader: "text-[13px] font-normal leading-tight text-ink",
   body:      "text-[12px] font-normal leading-snug text-ink",
   bullet:    "text-[12px] font-normal leading-snug text-ink",
-  stat:      "text-[20px] font-extrabold leading-none text-ink",
+  stat:      "text-[18px] font-semibold leading-none text-ink",
   quote:     "text-[11px] italic leading-snug text-muted-foreground",
   // backward compat
-  claim:     "text-[16px] font-bold leading-tight text-ink",
+  claim:     "text-[14px] font-medium leading-tight text-ink",
   evidence:  "text-[12px] font-normal leading-snug text-ink",
   aside:     "text-[11px] italic leading-snug text-muted-foreground",
 };

@@ -79,7 +79,7 @@ export function ScenePanel({
   onReconsider,
   onDelete,
 }: Props) {
-  const [tab, setTab] = useState<Tab>("inspect");
+  const [tab, setTab] = useState<Tab>("chat");
   const isGhost = Boolean(node?.ghost);
 
   return (

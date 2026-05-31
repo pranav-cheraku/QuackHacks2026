@@ -32,6 +32,17 @@ export const MEDIA_COMPONENTS: ComponentType[] = [
 export type SceneKind = "title" | "problem" | "data";
 export type SceneStatus = "final" | "draft" | "in-review";
 
+// `role` is the scene's narrative job (shown + editable in the Inspect panel).
+export type SceneRole = "claim" | "evidence" | "data" | "title";
+
+// A content block on a scene (the slide's "ingredients"). Listed in Inspect's
+// "Content blocks"; step 10 will also tether these to the canvas as sub-nodes.
+export interface ContentBlock {
+  id: string;
+  type: ComponentType;
+  label: string;
+}
+
 // Legacy fields (`state`, `thumb`) are still consumed by the Slides View
 // (EditorView / SlideThumb). Kept until that view is reworked.
 export type SlideState = "rendered" | "ingredient";
@@ -55,6 +66,10 @@ export interface SlideNode {
   y: number;
   width?: number;
   height?: number;
+  // Graph-view Inspect panel fields (all optional).
+  role?: SceneRole;
+  locked?: boolean;
+  blocks?: ContentBlock[];
   // legacy — Slides View only
   state: SlideState;
   thumb: "title" | "stats" | "chart" | "list" | "closing";
@@ -86,6 +101,12 @@ export const INITIAL_NODES: SlideNode[] = [
     y: 70,
     width: 340,
     height: 190,
+    role: "title",
+    locked: false,
+    blocks: [
+      { id: "n1-b1", type: "Header", label: "Logistics that thinks ahead." },
+      { id: "n1-b2", type: "Subheader", label: "Series A · 2026" },
+    ],
     state: "rendered",
     thumb: "title",
     elements: [],
@@ -102,6 +123,12 @@ export const INITIAL_NODES: SlideNode[] = [
     y: 370,
     width: 300,
     height: 180,
+    role: "claim",
+    locked: false,
+    blocks: [
+      { id: "n2-b1", type: "Body", label: "Reactive logistics burns margin." },
+      { id: "n2-b2", type: "List", label: "3 failure modes" },
+    ],
     state: "ingredient",
     thumb: "list",
     elements: [],
@@ -118,6 +145,12 @@ export const INITIAL_NODES: SlideNode[] = [
     y: 370,
     width: 320,
     height: 180,
+    role: "data",
+    locked: false,
+    blocks: [
+      { id: "n3-b1", type: "Stat", label: "+38% on-time delivery" },
+      { id: "n3-b2", type: "Chart", label: "Quarterly revenue" },
+    ],
     state: "rendered",
     thumb: "chart",
     elements: [],

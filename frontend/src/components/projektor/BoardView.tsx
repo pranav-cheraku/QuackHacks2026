@@ -4,13 +4,18 @@ import { GraphToolRail } from "./GraphToolRail";
 import { StatusFilterPanel } from "./StatusFilterPanel";
 import { DraggablePanel } from "./DraggablePanel";
 import { Minimap } from "./Minimap";
+import { ScenePanel } from "./ScenePanel";
 import { SlideCard } from "./SlideCard";
 import {
   INITIAL_NODES,
   INITIAL_EDGES,
   type SlideNode,
   type Edge,
+  type EdgeRelation,
   type SceneStatus,
+  type SceneRole,
+  type ComponentType,
+  type ContentBlock,
 } from "@/lib/projektor-data";
 import { Maximize2, Minus, Plus, Wand2 } from "lucide-react";
 import {
@@ -51,8 +56,9 @@ function anchor(n: SlideNode, side: "right" | "left" | "top" | "bottom") {
 
 export function BoardView({ zoom, setZoom, onOpenEditor }: Props) {
   const [nodes, setNodes] = useState<SlideNode[]>(INITIAL_NODES);
-  const [edges] = useState<Edge[]>(INITIAL_EDGES);
+  const [edges, setEdges] = useState<Edge[]>(INITIAL_EDGES);
   const [selected, setSelected] = useState<string | null>("n1");
+  const [inspectorOpen, setInspectorOpen] = useState(true);
   const [pan, setPan] = useState({ x: 0, y: 0 });
   const [focusPicked, setFocusPicked] = useState(false);
   const [outlineOpen, setOutlineOpen] = useState(false);
@@ -63,8 +69,58 @@ export function BoardView({ zoom, setZoom, onOpenEditor }: Props) {
   );
   const panRef = useRef<{ x: number; y: number } | null>(null);
   const viewportRef = useRef<HTMLDivElement>(null);
+  const blockSeq = useRef(0); // monotonic ids for added content blocks
 
   const findNode = (id: string) => nodes.find((n) => n.id === id)!;
+
+  // Selecting a node always (re)opens the inspector on it.
+  const selectNode = (id: string) => {
+    setSelected(id);
+    setInspectorOpen(true);
+  };
+
+  // --- Inspect-panel updaters ----------------------------------------------
+  const patchNode = (id: string, patch: Partial<SlideNode>) =>
+    setNodes((ns) => ns.map((n) => (n.id === id ? { ...n, ...patch } : n)));
+
+  const setStatus = (id: string, status: SceneStatus) =>
+    patchNode(id, { status });
+  const setRole = (id: string, role: SceneRole) => patchNode(id, { role });
+  const toggleLock = (id: string) =>
+    setNodes((ns) =>
+      ns.map((n) => (n.id === id ? { ...n, locked: !n.locked } : n)),
+    );
+  const addBlock = (id: string, type: ComponentType) => {
+    blockSeq.current += 1;
+    const block: ContentBlock = {
+      id: `${id}-b-${blockSeq.current}`,
+      type,
+      label: type,
+    };
+    setNodes((ns) =>
+      ns.map((n) =>
+        n.id === id ? { ...n, blocks: [...(n.blocks ?? []), block] } : n,
+      ),
+    );
+  };
+  const removeBlock = (id: string, blockId: string) =>
+    setNodes((ns) =>
+      ns.map((n) =>
+        n.id === id
+          ? { ...n, blocks: (n.blocks ?? []).filter((b) => b.id !== blockId) }
+          : n,
+      ),
+    );
+  // Relation lives on the edge into this node; editing it updates the canvas label.
+  const setRelation = (toId: string, relation: EdgeRelation) =>
+    setEdges((es) => es.map((e) => (e.to === toId ? { ...e, relation } : e)));
+
+  const selectedNode = selected
+    ? (nodes.find((n) => n.id === selected) ?? null)
+    : null;
+  const parentEdge = selected
+    ? edges.find((e) => e.to === selected)
+    : undefined;
 
   // A node dims when it's off the picked path (focus) or filtered out by status.
   const isNodeDimmed = (n: SlideNode) =>
@@ -143,7 +199,7 @@ export function BoardView({ zoom, setZoom, onOpenEditor }: Props) {
 
   // Outline click → select the node and fly the canvas to center it.
   const jumpTo = (id: string) => {
-    setSelected(id);
+    selectNode(id);
     const n = nodes.find((x) => x.id === id);
     const vp = viewportRef.current;
     if (!n || !vp) return;
@@ -294,7 +350,7 @@ export function BoardView({ zoom, setZoom, onOpenEditor }: Props) {
                 node={n}
                 selected={selected === n.id}
                 dimmed={isNodeDimmed(n)}
-                onSelect={() => setSelected(n.id)}
+                onSelect={() => selectNode(n.id)}
                 onOpenEditor={() => onOpenEditor(n.id)}
                 onMove={(x, y) =>
                   setNodes((ns) =>
@@ -360,6 +416,22 @@ export function BoardView({ zoom, setZoom, onOpenEditor }: Props) {
             zoom={zoom}
             viewportW={viewportRef.current?.clientWidth ?? 0}
             viewportH={viewportRef.current?.clientHeight ?? 0}
+          />
+        )}
+
+        {/* Right scene panel (Chat / Inspect / Argument) */}
+        {inspectorOpen && (
+          <ScenePanel
+            node={selectedNode}
+            parentRelation={parentEdge?.relation ?? null}
+            hasParent={Boolean(parentEdge)}
+            onClose={() => setInspectorOpen(false)}
+            onChangeStatus={setStatus}
+            onChangeRole={setRole}
+            onChangeRelation={setRelation}
+            onToggleLock={toggleLock}
+            onAddBlock={addBlock}
+            onRemoveBlock={removeBlock}
           />
         )}
 

@@ -166,6 +166,9 @@ export function BoardView({ zoom, setZoom, onOpenEditor }: Props) {
   const [nodes, setNodes] = useState<SlideNode[]>(INITIAL_NODES);
   const [edges, setEdges] = useState<Edge[]>(INITIAL_EDGES);
   const [selected, setSelected] = useState<string | null>("n1");
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set(["n1"]));
+  const [canvasMode, setCanvasMode] = useState<"navigate" | "select">("navigate");
+  const [selectionBox, setSelectionBox] = useState<{ x1: number; y1: number; x2: number; y2: number } | null>(null);
   const [inspectorOpen, setInspectorOpen] = useState(true);
   const [contentSceneId, setContentSceneId] = useState<string | null>(null);
   const [pan, setPan] = useState({ x: 0, y: 0 });
@@ -177,16 +180,28 @@ export function BoardView({ zoom, setZoom, onOpenEditor }: Props) {
     () => new Set<SceneStatus>(["final", "in-review", "draft"]),
   );
   const panRef = useRef<{ x: number; y: number } | null>(null);
+  const selBoxOriginRef = useRef<{ cx: number; cy: number } | null>(null);
   const viewportRef = useRef<HTMLDivElement>(null);
   const blockSeq = useRef(0); // monotonic ids for added content blocks
   const genSeq = useRef(0); // monotonic ids for generated candidate nodes
 
   const findNode = (id: string) => nodes.find((n) => n.id === id)!;
 
-  // Selecting a node always (re)opens the inspector on it.
-  const selectNode = (id: string) => {
-    setSelected(id);
-    setInspectorOpen(true);
+  // Selecting a node. additive=true (shift-click) toggles membership in the
+  // multi-selection without changing the inspector's focused node.
+  const selectNode = (id: string, additive = false) => {
+    if (additive) {
+      setSelectedIds((prev) => {
+        const next = new Set(prev);
+        if (next.has(id)) next.delete(id);
+        else next.add(id);
+        return next;
+      });
+    } else {
+      setSelected(id);
+      setSelectedIds(new Set([id]));
+      setInspectorOpen(true);
+    }
   };
 
   // --- Inspect-panel updaters ----------------------------------------------
@@ -375,22 +390,89 @@ export function BoardView({ zoom, setZoom, onOpenEditor }: Props) {
 
   const onCanvasMouseDown = (e: React.MouseEvent) => {
     if ((e.target as HTMLElement).closest("[data-node]")) return;
-    setSelected(null);
-    panRef.current = { x: e.clientX - pan.x, y: e.clientY - pan.y };
-    const move = (ev: MouseEvent) => {
-      if (!panRef.current) return;
-      setPan({
-        x: ev.clientX - panRef.current.x,
-        y: ev.clientY - panRef.current.y,
+
+    if (canvasMode === "navigate") {
+      setSelected(null);
+      setSelectedIds(new Set());
+      panRef.current = { x: e.clientX - pan.x, y: e.clientY - pan.y };
+      const move = (ev: MouseEvent) => {
+        if (!panRef.current) return;
+        setPan({
+          x: ev.clientX - panRef.current.x,
+          y: ev.clientY - panRef.current.y,
+        });
+      };
+      const up = () => {
+        panRef.current = null;
+        window.removeEventListener("mousemove", move);
+        window.removeEventListener("mouseup", up);
+      };
+      window.addEventListener("mousemove", move);
+      window.addEventListener("mouseup", up);
+    } else {
+      // Select mode — draw a marquee box in canvas space.
+      const vp = viewportRef.current;
+      if (!vp) return;
+      const rect = vp.getBoundingClientRect();
+      const toCanvas = (cx: number, cy: number) => ({
+        x: (cx - rect.left - pan.x) / zoom,
+        y: (cy - rect.top - pan.y) / zoom,
       });
-    };
-    const up = () => {
-      panRef.current = null;
-      window.removeEventListener("mousemove", move);
-      window.removeEventListener("mouseup", up);
-    };
-    window.addEventListener("mousemove", move);
-    window.addEventListener("mouseup", up);
+      const origin = toCanvas(e.clientX, e.clientY);
+      selBoxOriginRef.current = { cx: origin.x, cy: origin.y };
+      setSelectionBox({ x1: origin.x, y1: origin.y, x2: origin.x, y2: origin.y });
+
+      const move = (ev: MouseEvent) => {
+        if (!selBoxOriginRef.current) return;
+        const cur = toCanvas(ev.clientX, ev.clientY);
+        const bx1 = Math.min(selBoxOriginRef.current.cx, cur.x);
+        const by1 = Math.min(selBoxOriginRef.current.cy, cur.y);
+        const bx2 = Math.max(selBoxOriginRef.current.cx, cur.x);
+        const by2 = Math.max(selBoxOriginRef.current.cy, cur.y);
+        setSelectionBox({ x1: selBoxOriginRef.current.cx, y1: selBoxOriginRef.current.cy, x2: cur.x, y2: cur.y });
+        const hits = nodes
+          .filter((n) => {
+            const nw = n.width ?? 320;
+            const nh = n.height ?? 180;
+            return n.x < bx2 && n.x + nw > bx1 && n.y < by2 && n.y + nh > by1;
+          })
+          .map((n) => n.id);
+        setSelectedIds(new Set(hits));
+      };
+      const up = (ev: MouseEvent) => {
+        if (selBoxOriginRef.current) {
+          const cur = toCanvas(ev.clientX, ev.clientY);
+          const bx1 = Math.min(selBoxOriginRef.current.cx, cur.x);
+          const by1 = Math.min(selBoxOriginRef.current.cy, cur.y);
+          const bx2 = Math.max(selBoxOriginRef.current.cx, cur.x);
+          const by2 = Math.max(selBoxOriginRef.current.cy, cur.y);
+          if (bx2 - bx1 <= 4 && by2 - by1 <= 4) {
+            // Plain click (no drag) → deselect all
+            setSelected(null);
+            setSelectedIds(new Set());
+          } else {
+            const hits = nodes
+              .filter((n) => {
+                const nw = n.width ?? 320;
+                const nh = n.height ?? 180;
+                return n.x < bx2 && n.x + nw > bx1 && n.y < by2 && n.y + nh > by1;
+              })
+              .map((n) => n.id);
+            setSelectedIds(new Set(hits));
+            if (hits.length === 1) {
+              setSelected(hits[0]);
+              setInspectorOpen(true);
+            }
+          }
+        }
+        selBoxOriginRef.current = null;
+        setSelectionBox(null);
+        window.removeEventListener("mousemove", move);
+        window.removeEventListener("mouseup", up);
+      };
+      window.addEventListener("mousemove", move);
+      window.addEventListener("mouseup", up);
+    }
   };
 
   // Frame a set of nodes so the whole tree fits in the viewport, with a
@@ -451,7 +533,7 @@ export function BoardView({ zoom, setZoom, onOpenEditor }: Props) {
       {/* Canvas */}
       <div
         ref={viewportRef}
-        className="flex-1 relative overflow-hidden dot-grid cursor-grab active:cursor-grabbing"
+        className={`flex-1 relative overflow-hidden dot-grid ${canvasMode === "navigate" ? "cursor-grab active:cursor-grabbing" : "cursor-crosshair"}`}
         onMouseDown={onCanvasMouseDown}
       >
         <div
@@ -598,6 +680,8 @@ export function BoardView({ zoom, setZoom, onOpenEditor }: Props) {
 
         {/* Left tool rail */}
         <GraphToolRail
+          canvasMode={canvasMode}
+          onSetMode={setCanvasMode}
           outlineOpen={outlineOpen}
           filterOpen={filterOpen}
           onToggleOutline={() => setOutlineOpen((v) => !v)}
@@ -656,6 +740,7 @@ export function BoardView({ zoom, setZoom, onOpenEditor }: Props) {
         {inspectorOpen && (
           <ScenePanel
             node={selectedNode}
+            selectedCount={selectedIds.size}
             parentRelation={parentEdge?.relation ?? null}
             hasParent={Boolean(parentEdge)}
             onClose={() => setInspectorOpen(false)}

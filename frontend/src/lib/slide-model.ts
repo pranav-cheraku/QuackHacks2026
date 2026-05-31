@@ -11,6 +11,9 @@ export interface TextStyle {
   textDecoration: "none" | "underline";
   textAlign: "left" | "center" | "right";
   color: string;
+  fontFamily?: "sans" | "mono" | "serif"; // maps to CSS font var; default: sans
+  lineHeight?: number; // multiplier, default 1.4
+  letterSpacing?: string; // e.g. "0.25em"
 }
 
 export interface ShapeStyle {

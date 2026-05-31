@@ -3,16 +3,13 @@ import type { SlideElement } from "@/lib/slide-model";
 import { gridToCSS } from "@/lib/grid";
 
 // Renders a scaled-down slide thumbnail.
-// The static `thumb` type draws the template background.
-// The `elements` array is rendered on top using the same grid math as the canvas —
-// this is what keeps thumbnails in sync with live edits.
+// If the slide has elements[], they are rendered via the same grid math as the canvas.
+// The static ThumbBackground is only shown for slides that have no elements yet.
 export function SlideThumb({ node }: { node: SlideNode }) {
+  const hasElements = node.elements.length > 0;
   return (
     <div className="relative w-full h-full overflow-hidden bg-white">
-      {/* Static template background */}
-      <ThumbBackground thumb={node.thumb} />
-
-      {/* Live user elements — same positioning as canvas, scales with container */}
+      {!hasElements && <ThumbBackground thumb={node.thumb} />}
       {node.elements.map((el) => (
         <ThumbElement key={el.id} el={el} />
       ))}
@@ -104,11 +101,19 @@ function ThumbElement({ el }: { el: SlideElement }) {
           style={{
             fontSize: Math.max(4, el.text.fontSize * 0.15),
             fontWeight: el.text.fontWeight,
+            fontStyle: el.text.fontStyle,
             color: el.text.color,
             textAlign: el.text.textAlign,
-            lineHeight: 1.3,
+            lineHeight: el.text.lineHeight ?? 1.3,
+            letterSpacing: el.text.letterSpacing,
+            fontFamily: el.text.fontFamily === "mono"
+              ? "var(--font-mono, monospace)"
+              : el.text.fontFamily === "serif"
+              ? "var(--font-serif, serif)"
+              : undefined,
             padding: "1px 2px",
             wordBreak: "break-word",
+            whiteSpace: "pre-wrap",
           }}
         >
           {el.text.content}

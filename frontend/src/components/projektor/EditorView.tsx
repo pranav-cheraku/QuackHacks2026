@@ -4,7 +4,7 @@ import {
   Undo2, Redo2, Italic, Underline,
   AlignLeft, AlignCenter, AlignRight,
   Type, ImageIcon, Square, ChevronDown,
-  Plus, Sparkles, CheckCircle2, Loader2,
+  Plus, Sparkles,
   Paperclip, Mic, Send, LayoutTemplate,
   Layers, Grid3x3, Trash2, Copy,
 } from "lucide-react";
@@ -773,56 +773,112 @@ function applyResize(handle: HandlePos, sp: GridPlacement, dx: number, dy: numbe
 }
 
 // ─── Agent panel ──────────────────────────────────────────────────────────────
+interface ChatMessage {
+  id: string;
+  role: "user" | "agent";
+  content: string;
+}
+
 function AgentPanel() {
+  const [messages, setMessages] = useState<ChatMessage[]>([]);
+  const [draft, setDraft] = useState("");
+  const listRef = useRef<HTMLDivElement>(null);
+
+  // Scroll to bottom whenever messages grow
+  useEffect(() => {
+    if (listRef.current) listRef.current.scrollTop = listRef.current.scrollHeight;
+  }, [messages]);
+
+  const submit = () => {
+    const text = draft.trim();
+    if (!text) return;
+    setMessages((prev) => [...prev, { id: `msg-${Date.now()}`, role: "user", content: text }]);
+    setDraft("");
+
+    // INTAKE: forward `text` + current slide IR to Gemini Flash.
+    //   agent.intake(text, slides) → yields SlideNode[] patches → dispatch({ type: "commit", updater })
+    //   Each mutation appends an agent-role message (checklist item) via setMessages.
+
+    // SELF-CRITIQUE: after the render loop completes, diff expected vs. rendered output.
+    //   Failures / warnings → agent messages with scene refs and suggested fixes.
+
+    // ARGUMENT INTELLIGENCE: Gemini Pro scans argument quality across all scenes.
+    //   Unsupported claims / pacing issues → clickable agent messages linking to scene + Argument tab.
+
+    // AGENT RESPONSE: append any agent reply here:
+    //   setMessages((prev) => [...prev, { id: `msg-${Date.now()}`, role: "agent", content: reply }]);
+  };
+
   return (
     <div className="flex-1 flex flex-col min-h-0">
-      <div className="flex-1 overflow-y-auto p-3 space-y-3">
-        <div className="flex justify-end gap-2 items-start">
-          <div className="max-w-[85%] rounded-xl rounded-tr-sm px-3 py-2 text-[11px] leading-snug text-white" style={{ background: "var(--accent-teal)" }}>
-            Here's the brain-dump + our deck-data.csv. Make it investor-ready, 5 minutes.
+      {/* Message list */}
+      <div ref={listRef} className="flex-1 overflow-y-auto p-3 space-y-3">
+        {messages.length === 0 ? (
+          <div className="flex flex-col items-center justify-center h-full gap-3 text-center py-10">
+            <div className="w-9 h-9 rounded-full bg-canvas border border-border flex items-center justify-center">
+              <Sparkles size={15} style={{ color: "var(--accent-teal)" }} />
+            </div>
+            <p className="text-[11px] text-muted-foreground leading-relaxed max-w-[190px]">
+              Drop a brain-dump, dataset, or prompt and the agent will refine the deck from here.
+            </p>
           </div>
-          <div className="w-6 h-6 rounded-full flex items-center justify-center text-[8px] font-bold text-white shrink-0 mt-0.5" style={{ background: "oklch(0.55 0.1 250)" }}>You</div>
-        </div>
-        <div className="flex gap-2 items-start">
-          <div className="w-6 h-6 rounded-full bg-canvas border border-border flex items-center justify-center shrink-0 mt-0.5">
-            <Sparkles size={10} style={{ color: "var(--accent-teal)" }} />
-          </div>
-          <div className="flex-1 bg-card border border-border rounded-xl rounded-tl-sm px-3 py-2.5 text-[11px] space-y-2">
-            {[
-              { done: true,  text: "Brand extracted → persimmon + pine palette" },
-              { done: true,  text: "7 scenes laid out, 6 passed first render" },
-              { done: true,  text: "Scene 04 re-balanced (was crowded)" },
-              { done: false, text: "Checking the argument…" },
-            ].map(({ done, text }, i) => (
-              <div key={i} className="flex items-start gap-2">
-                {done
-                  ? <CheckCircle2 size={12} className="mt-px shrink-0" style={{ color: "var(--accent-teal)" }} />
-                  : <Loader2     size={12} className="mt-px shrink-0 animate-spin text-muted-foreground" />}
-                <span className={done ? "text-ink" : "text-muted-foreground"}>{text}</span>
+        ) : (
+          messages.map((msg) =>
+            msg.role === "user" ? (
+              <div key={msg.id} className="flex justify-end gap-2 items-start">
+                <div
+                  className="max-w-[85%] rounded-xl rounded-tr-sm px-3 py-2 text-[11px] leading-snug text-white whitespace-pre-wrap"
+                  style={{ background: "var(--accent-teal)" }}
+                >
+                  {msg.content}
+                </div>
+                <div
+                  className="w-6 h-6 rounded-full flex items-center justify-center text-[8px] font-bold text-white shrink-0 mt-0.5"
+                  style={{ background: "oklch(0.55 0.1 250)" }}
+                >
+                  You
+                </div>
               </div>
-            ))}
-          </div>
-        </div>
-        <div className="flex gap-2 items-start">
-          <div className="w-6 h-6 rounded-full bg-canvas border border-border flex items-center justify-center shrink-0 mt-0.5">
-            <Sparkles size={10} style={{ color: "var(--accent-teal)" }} />
-          </div>
-          <div className="flex-1 bg-card border border-border rounded-xl rounded-tl-sm px-3 py-2.5 text-[11px] leading-snug text-muted-foreground">
-            Scene <strong className="text-ink">06</strong> makes a claim with no evidence, and you're running <strong className="text-ink">~7 min</strong> for a 5-min slot.
-          </div>
-        </div>
+            ) : (
+              <div key={msg.id} className="flex gap-2 items-start">
+                <div className="w-6 h-6 rounded-full bg-canvas border border-border flex items-center justify-center shrink-0 mt-0.5">
+                  <Sparkles size={10} style={{ color: "var(--accent-teal)" }} />
+                </div>
+                <div className="flex-1 bg-card border border-border rounded-xl rounded-tl-sm px-3 py-2.5 text-[11px] leading-snug text-muted-foreground whitespace-pre-wrap">
+                  {msg.content}
+                </div>
+              </div>
+            )
+          )
+        )}
       </div>
+
+      {/* Input */}
       <div className="border-t border-border p-2.5 shrink-0">
         <div className="border border-border rounded-lg px-3 py-2 bg-card flex items-center">
-          <input className="flex-1 text-[11px] bg-transparent outline-none placeholder:text-muted-foreground" placeholder="Ask the agent to refine the deck…" />
+          <input
+            className="flex-1 text-[11px] bg-transparent outline-none placeholder:text-muted-foreground"
+            placeholder="Ask the agent to refine the deck…"
+            value={draft}
+            onChange={(e) => setDraft(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); submit(); }
+            }}
+          />
         </div>
         <div className="flex items-center justify-between mt-2 px-0.5">
           <div className="flex gap-0.5">
             {[Paperclip, Mic].map((Icon, i) => (
-              <button key={i} className="w-7 h-7 flex items-center justify-center rounded hover:bg-canvas/60 text-muted-foreground hover:text-ink transition-colors"><Icon size={13} /></button>
+              <button key={i} className="w-7 h-7 flex items-center justify-center rounded hover:bg-canvas/60 text-muted-foreground hover:text-ink transition-colors">
+                <Icon size={13} />
+              </button>
             ))}
           </div>
-          <button className="w-8 h-8 rounded-full flex items-center justify-center text-white hover:opacity-80 transition-opacity" style={{ background: "var(--accent-teal)" }}>
+          <button
+            onClick={submit}
+            className="w-8 h-8 rounded-full flex items-center justify-center text-white hover:opacity-80 transition-opacity"
+            style={{ background: "var(--accent-teal)" }}
+          >
             <Send size={13} />
           </button>
         </div>

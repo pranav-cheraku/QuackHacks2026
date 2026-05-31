@@ -1,6 +1,7 @@
 import { onCall, HttpsError } from "firebase-functions/v2/https";
 import { defineSecret } from "firebase-functions/params";
 import { GoogleGenerativeAI } from "@google/generative-ai";
+import { Schema } from "@google/generative-ai";
 import { slideSpecSchema } from "./slideSpecSchema";
 
 const geminiKey = defineSecret("GEMINI_API_KEY");
@@ -20,7 +21,7 @@ export const renderSlide = onCall(
       model: "gemini-2.0-flash",
       generationConfig: {
         responseMimeType: "application/json",
-        responseSchema: slideSpecSchema,
+        responseSchema: slideSpecSchema as Schema,
       },
     });
 

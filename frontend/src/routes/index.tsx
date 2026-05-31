@@ -1,5 +1,5 @@
-import { createFileRoute } from "@tanstack/react-router";
-import { useState } from "react";
+import { createFileRoute, useNavigate } from "@tanstack/react-router";
+import { useEffect, useState } from "react";
 import { TopBar } from "@/components/projektor/TopBar";
 import { BoardView } from "@/components/projektor/BoardView";
 import { EditorView } from "@/components/projektor/EditorView";
@@ -7,6 +7,7 @@ import { LandingPage } from "@/components/projektor/LandingPage";
 import { INITIAL_NODES, INITIAL_EDGES, type SlideNode, type Edge } from "@/lib/projektor-data";
 import { createDeck, getDeck } from "@/lib/deckStore";
 import type { HydrateResult } from "@/lib/chunker";
+import { useAuth } from "@/context/AuthContext";
 
 // ── Route search params: ?deckId=xxx loads a specific deck from the session store
 export const Route = createFileRoute("/")({
@@ -28,9 +29,9 @@ export const Route = createFileRoute("/")({
 
 function Projektor() {
   const { deckId } = Route.useSearch();
+  const { currentUser, loading } = useAuth();
+  const navigate = useNavigate();
 
-  // If a deckId is in the URL, load that deck directly (skip landing phase).
-  // Otherwise start at landing so every fresh / shows the intake screen.
   const savedDeck = deckId ? getDeck(deckId) : undefined;
 
   const [phase, setPhase] = useState<"landing" | "app">(
@@ -42,16 +43,23 @@ function Projektor() {
   const [zoom, setZoom] = useState(0.85);
   const [editorStart, setEditorStart] = useState<string | null>(null);
 
-  // GRAPH VIEW ENTRY POINT: generate output lands on the graph (board mode), NOT the editor.
-  // Buckets populate the graph as structural argument nodes; slide design happens
-  // lazily per-bucket (double-click → slide-design agent → candidate picker).
-  // Each call creates a new deck entry in the session store (multi-deck support).
+  useEffect(() => {
+    if (!loading && !currentUser) {
+      navigate({ to: "/signin" });
+    }
+  }, [loading, currentUser, navigate]);
+
+  if (loading || !currentUser) return null;
+
+  // GRAPH VIEW ENTRY POINT: generate output lands on the graph (board mode).
+  // Buckets populate the graph as structural argument nodes; each call creates
+  // a new deck entry in the session store (multi-deck support).
   const handleGenerate = ({ nodes, edges }: HydrateResult) => {
-    createDeck(nodes, edges); // saves to session store; dashboard will list it
+    createDeck(nodes, edges);
     setDeck(nodes);
     setDeckEdges(edges);
     setEditorStart(null);
-    setMode("board"); // ← graph view, buckets visible immediately
+    setMode("board");
     setPhase("app");
   };
 
@@ -72,17 +80,6 @@ function Projektor() {
             setEditorStart(id);
             setMode("editor");
           }}
-          // GRAPH SYNC: when the user picks a slide design candidate in the graph,
-          // the node's elements + designStatus are updated in BoardView's local state.
-          // onDesignApplied propagates that back up to Projektor.deck so EditorView
-          // (seeded from deck) reflects the realized layout when the user switches views.
-          // TODO: once deck is lifted to fully controlled state, remove this callback
-          // and instead drive both views from a single shared nodes array.
-          onDesignApplied={(updatedNode) =>
-            setDeck((prev) =>
-              prev.map((n) => (n.id === updatedNode.id ? updatedNode : n)),
-            )
-          }
         />
       )}
       {/* EditorView stays mounted so useState never resets; display:none hides it in board mode */}

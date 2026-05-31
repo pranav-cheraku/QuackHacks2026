@@ -32,13 +32,23 @@ export const MEDIA_COMPONENTS: ComponentType[] = [
 export type SceneKind = "title" | "problem" | "data";
 export type SceneStatus = "final" | "draft" | "in-review";
 
+// `role` is the scene's narrative job (shown + editable in the Inspect panel).
+export type SceneRole = "claim" | "evidence" | "data" | "title";
+
+// A content block on a scene (the slide's "ingredients"). Listed in Inspect's
+// "Content blocks"; step 10 will also tether these to the canvas as sub-nodes.
+export interface ContentBlock {
+  id: string;
+  type: ComponentType;
+  label: string;
+}
+
 // Legacy fields (`state`, `thumb`) are still consumed by the Slides View
 // (EditorView / SlideThumb). Kept until that view is reworked.
 export type SlideState = "rendered" | "ingredient";
 
 // "bucket"  = raw content from chunker, no slide design yet — lives in graph only.
 // "designed" = has a realized layout (elements[]); viewable/editable in slide editor.
-// undefined is treated as "designed" for backwards compat with INITIAL_NODES.
 export type DesignStatus = "bucket" | "designed";
 
 // Slides View (slide editor) — a design alternative for a scene.
@@ -60,17 +70,23 @@ export interface SlideNode {
   y: number;
   width?: number;
   height?: number;
-  elements: import("./slide-model").SlideElement[];
-  // Legacy fields consumed by the Slides View until it is reworked
-  rotation?: number;
+  // Graph-view Inspect panel fields (all optional).
+  role?: SceneRole;
+  locked?: boolean;
+  blocks?: ContentBlock[];
+  // Ghost (AI-suggested branch) fields.
+  ghost?: boolean;
+  discarded?: boolean;
+  rationale?: string;
+  // "bucket" = raw content from chunker; "designed" (or undefined) = has a layout.
+  designStatus?: DesignStatus;
+  // legacy — Slides View only (optional for chunker-generated nodes)
   state?: SlideState;
   thumb?: "title" | "stats" | "chart" | "list" | "closing";
-  components?: ComponentType[];
-  candidates?: import("./projektor-data").SlideCandidate[];
-  activeDesignId?: string | null;
-  // "bucket" = raw content from chunker, no design yet.
-  // "designed" (or undefined) = has a realized layout in elements[].
-  designStatus?: DesignStatus;
+  // Slides View (slide editor) — element model + design candidates.
+  elements: import("./slide-model").SlideElement[];
+  candidates: SlideCandidate[];
+  activeDesignId: string | null;
 }
 
 export type EdgeRelation = "supports" | "contrasts" | "builds-on" | "sequence";
@@ -93,90 +109,63 @@ export const INITIAL_NODES: SlideNode[] = [
     body: "Meridian turns fleet telemetry into decisions — before the delay happens.",
     x: 560,
     y: 70,
-    width: 280,
-    height: 170,
+    width: 340,
+    height: 190,
+    role: "title",
+    locked: false,
+    blocks: [
+      { id: "n1-b1", type: "Header", label: "Logistics that thinks ahead." },
+      { id: "n1-b2", type: "Subheader", label: "Series A · 2026" },
+    ],
     state: "rendered",
     thumb: "title",
     elements: [],
+    candidates: [],
+    activeDesignId: null,
   },
   {
     id: "n2",
     index: 2,
-    title: "By the Numbers",
-    kind: "data",
-    status: "final",
-    x: 430,
-    y: 150,
-    rotation: 0.8,
-    state: "rendered",
-    components: [],
-    thumb: "stats",
-    width: 280,
-    height: 170,
+    title: "The problem we avoid",
+    kind: "problem",
+    status: "draft",
+    x: 390,
+    y: 370,
+    width: 300,
+    height: 180,
+    role: "claim",
+    locked: false,
+    blocks: [
+      { id: "n2-b1", type: "Body", label: "Reactive logistics burns margin." },
+      { id: "n2-b2", type: "List", label: "3 failure modes" },
+    ],
+    state: "ingredient",
+    thumb: "list",
     elements: [],
+    candidates: [],
+    activeDesignId: null,
   },
   {
     id: "n3",
     index: 3,
-    title: "Market Landscape",
-    kind: "problem",
-    status: "in-review",
-    x: 800,
-    y: 90,
-    rotation: -0.6,
-    state: "ingredient",
-    components: ["Header", "Image", "Body"],
-    thumb: "title",
-    width: 260,
-    height: 220,
-    elements: [],
-  },
-  {
-    id: "n4",
-    index: 4,
-    title: "Growth Trajectory",
+    title: "Pipeline → revenue",
     kind: "data",
-    status: "draft",
-    x: 1140,
-    y: 200,
-    rotation: 1.4,
+    status: "in-review",
+    x: 760,
+    y: 370,
+    width: 320,
+    height: 180,
+    role: "data",
+    locked: false,
+    blocks: [
+      { id: "n3-b1", type: "Stat", label: "+38% on-time delivery" },
+      { id: "n3-b2", type: "Chart", label: "Quarterly revenue" },
+    ],
     state: "rendered",
     thumb: "chart",
-    width: 280,
-    height: 170,
     elements: [],
-  },
-  {
-    id: "n5",
-    index: 5,
-    title: "Three Bets for Q4",
-    kind: "data",
-    status: "draft",
-    x: 1480,
-    y: 110,
-    rotation: -0.4,
-    state: "rendered",
-    components: [],
-    thumb: "list",
-    width: 280,
-    height: 170,
-    elements: [],
-  },
-  {
-    id: "n6",
-    index: 6,
-    title: "Closing",
-    kind: "title",
-    status: "draft",
-    x: 1820,
-    y: 200,
-    rotation: 0.6,
-    state: "rendered",
-    components: [],
-    thumb: "closing",
-    width: 280,
-    height: 170,
-    elements: [],
+    candidates: [],
+    activeDesignId: null,
   },
 ];
 

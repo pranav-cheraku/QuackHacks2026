@@ -1,21 +1,27 @@
-import { useRef, useState, useCallback } from "react";
+import { useRef, useState } from "react";
 import { GraphMapPanel } from "./GraphMapPanel";
 import { GraphToolRail } from "./GraphToolRail";
 import { StatusFilterPanel } from "./StatusFilterPanel";
 import { DraggablePanel } from "./DraggablePanel";
 import { Minimap } from "./Minimap";
+import { ScenePanel } from "./ScenePanel";
+import { GhostCard } from "./GhostCard";
+import { GenerateNode } from "./GenerateNode";
+import { ContentGraphView } from "./ContentGraphView";
 import { SlideCard } from "./SlideCard";
 import {
   INITIAL_NODES,
   INITIAL_EDGES,
   type SlideNode,
-  type SlideCandidate,
   type Edge,
+  type EdgeRelation,
   type SceneStatus,
-  type DesignStatus,
+  type SceneRole,
+  type SceneKind,
+  type ComponentType,
+  type ContentBlock,
 } from "@/lib/projektor-data";
-import { generateSlideCandidates } from "@/lib/slideDesignAgent";
-import { Maximize2, Minus, Plus, Wand2, X } from "lucide-react";
+import { Maximize2, Minus, Plus, Wand2 } from "lucide-react";
 import {
   Tooltip,
   TooltipContent,
@@ -27,13 +33,115 @@ interface Props {
   zoom: number;
   setZoom: (z: number) => void;
   onOpenEditor: (nodeId: string) => void;
-  onDesignApplied: (updatedNode: SlideNode) => void;
   initialNodes?: SlideNode[];
   initialEdges?: Edge[];
 }
 
 // Placeholder chosen spine — real pick logic lands with the branch model.
 const PICKED_PATH = new Set(["n1", "n3"]);
+
+// Placeholder candidate pool — stands in for the AI until a backend exists.
+const SUGGESTIONS: { title: string; rationale: string; kind: SceneKind }[] = [
+  {
+    title: "Why now — the urgency",
+    rationale: "Follow it with the cost of waiting — it sharpens the ask.",
+    kind: "problem",
+  },
+  {
+    title: "The ask — what we need",
+    rationale:
+      "Go straight to the round size and use of funds while it's fresh.",
+    kind: "title",
+  },
+  {
+    title: "Proof in the numbers",
+    rationale: "Lead with the metric that moved most — let the chart carry it.",
+    kind: "data",
+  },
+  {
+    title: "Who it's for",
+    rationale: "Ground the story in one customer feeling the problem today.",
+    kind: "problem",
+  },
+  {
+    title: "The bigger vision",
+    rationale: "Zoom out to the 10-year picture before landing the close.",
+    kind: "title",
+  },
+  {
+    title: "How it works",
+    rationale: "Show the loop end-to-end so the 'how' is obvious.",
+    kind: "problem",
+  },
+];
+
+// Tidy tree layout: each leaf gets a horizontal slot; each parent is centered
+// over its children; rows by depth. Anchored to the root's current position so
+// the root stays put and the camera doesn't move. Pure — returns new nodes.
+function tidyNodes(ns: SlideNode[], es: Edge[]): SlideNode[] {
+  const childrenMap = new Map<string, string[]>();
+  es.forEach((e) =>
+    childrenMap.set(e.from, [...(childrenMap.get(e.from) ?? []), e.to]),
+  );
+  const hasParent = new Set(es.map((e) => e.to));
+  const byId = new Map(ns.map((n) => [n.id, n]));
+  const widthOf = (id: string) => byId.get(id)?.width ?? 320;
+  const vGap = 300;
+  const gap = 60;
+
+  const centerX = new Map<string, number>();
+  const yOf = new Map<string, number>();
+  const seen = new Set<string>();
+  let cursor = 0;
+
+  const childIds = (id: string) =>
+    (childrenMap.get(id) ?? [])
+      .map((cid) => byId.get(cid))
+      .filter((n): n is SlideNode => Boolean(n))
+      .sort((a, b) => a.index - b.index)
+      .map((n) => n.id);
+
+  const place = (id: string, depth: number): number => {
+    if (seen.has(id)) return centerX.get(id) ?? 0; // cycle guard
+    seen.add(id);
+    yOf.set(id, depth * vGap);
+    const kids = childIds(id);
+    if (kids.length === 0) {
+      const cx = cursor + widthOf(id) / 2;
+      cursor += widthOf(id) + gap;
+      centerX.set(id, cx);
+      return cx;
+    }
+    const kidCenters = kids.map((k) => place(k, depth + 1));
+    const cx = (kidCenters[0] + kidCenters[kidCenters.length - 1]) / 2;
+    centerX.set(id, cx);
+    return cx;
+  };
+
+  const roots = ns
+    .filter((n) => !hasParent.has(n.id))
+    .sort((a, b) => a.index - b.index);
+  (roots.length ? roots : ns.slice(0, 1)).forEach((r) => place(r.id, 0));
+  ns.forEach((n) => place(n.id, 0)); // any orphans
+
+  // Anchor the root's top-left to where it already is.
+  const root = roots[0] ?? ns[0];
+  const rootNewLeft = root
+    ? (centerX.get(root.id) ?? 0) - widthOf(root.id) / 2
+    : 0;
+  const dx = root ? root.x - rootNewLeft : 0;
+  const dy = root ? root.y - (yOf.get(root.id) ?? 0) : 0;
+
+  return ns.map((n) => {
+    const cx = centerX.get(n.id);
+    if (cx == null) return n;
+    return {
+      ...n,
+      x: cx - widthOf(n.id) / 2 + dx,
+      y: (yOf.get(n.id) ?? 0) + dy,
+    };
+  });
+}
 
 function buildPath(
   a: { x: number; y: number },
@@ -55,10 +163,15 @@ function anchor(n: SlideNode, side: "right" | "left" | "top" | "bottom") {
   return { x: n.x + w / 2, y: n.y + h };
 }
 
-export function BoardView({ zoom, setZoom, onOpenEditor, onDesignApplied, initialNodes, initialEdges }: Props) {
+export function BoardView({ zoom, setZoom, onOpenEditor, initialNodes, initialEdges }: Props) {
   const [nodes, setNodes] = useState<SlideNode[]>(initialNodes ?? INITIAL_NODES);
-  const [edges] = useState<Edge[]>(initialEdges ?? INITIAL_EDGES);
-  const [selected, setSelected] = useState<string | null>(null);
+  const [edges, setEdges] = useState<Edge[]>(initialEdges ?? INITIAL_EDGES);
+  const [selected, setSelected] = useState<string | null>("n1");
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set(["n1"]));
+  const [canvasMode, setCanvasMode] = useState<"navigate" | "select">("navigate");
+  const [selectionBox, setSelectionBox] = useState<{ x1: number; y1: number; x2: number; y2: number } | null>(null);
+  const [inspectorOpen, setInspectorOpen] = useState(true);
+  const [contentSceneId, setContentSceneId] = useState<string | null>(null);
   const [pan, setPan] = useState({ x: 0, y: 0 });
   const [focusPicked, setFocusPicked] = useState(false);
   const [outlineOpen, setOutlineOpen] = useState(false);
@@ -67,72 +180,135 @@ export function BoardView({ zoom, setZoom, onOpenEditor, onDesignApplied, initia
   const [activeStatuses, setActiveStatuses] = useState<Set<SceneStatus>>(
     () => new Set<SceneStatus>(["final", "in-review", "draft"]),
   );
-  // Slide-design agent state
-  const [designingNodeId, setDesigningNodeId] = useState<string | null>(null);
-  const [generatingNodeId, setGeneratingNodeId] = useState<string | null>(null);
   const panRef = useRef<{ x: number; y: number } | null>(null);
+  const selBoxOriginRef = useRef<{ cx: number; cy: number } | null>(null);
   const viewportRef = useRef<HTMLDivElement>(null);
-
-  // ── Slide-design agent ──────────────────────────────────────────────────────
-  // Double-clicking a bucket triggers generateSlideCandidates, then shows the
-  // candidate-picker overlay. On pick, the node transitions to "designed" and
-  // the editor is opened for that scene.
-  const handleDesignBucket = useCallback(async (nodeId: string) => {
-    const node = nodes.find((n) => n.id === nodeId);
-    if (!node) return;
-
-    // If candidates already exist, go straight to the picker
-    if (node.candidates?.length) {
-      setDesigningNodeId(nodeId);
-      return;
-    }
-
-    // SLIDE-DESIGN AGENT CALL (swap point — see src/lib/slideDesignAgent.ts)
-    setGeneratingNodeId(nodeId);
-    try {
-      const candidates = await generateSlideCandidates(node);
-      setNodes((ns) =>
-        ns.map((n) => (n.id === nodeId ? { ...n, candidates } : n)),
-      );
-      setDesigningNodeId(nodeId);
-    } catch (err) {
-      console.error("[slide-design] Failed to generate candidates:", err);
-    } finally {
-      setGeneratingNodeId(null);
-    }
-  }, [nodes]);
-
-  const handlePickCandidate = useCallback((nodeId: string, candidate: SlideCandidate) => {
-    const updated: Partial<SlideNode> = {
-      elements: candidate.elements,
-      activeDesignId: candidate.id,
-      designStatus: "designed" as DesignStatus,
-    };
-    let updatedNode: SlideNode | undefined;
-    setNodes((ns) =>
-      ns.map((n) => {
-        if (n.id !== nodeId) return n;
-        updatedNode = { ...n, ...updated };
-        return updatedNode;
-      }),
-    );
-    setDesigningNodeId(null);
-    // GRAPH SYNC: propagate design back to Projektor.deck so EditorView
-    // (seeded from deck) receives the realized layout on next mode switch.
-    if (updatedNode) {
-      onDesignApplied(updatedNode);
-      // Open the slide editor for the newly designed scene
-      onOpenEditor(nodeId);
-    }
-  }, [onDesignApplied, onOpenEditor]);
+  const blockSeq = useRef(0); // monotonic ids for added content blocks
+  const genSeq = useRef(0); // monotonic ids for generated candidate nodes
 
   const findNode = (id: string) => nodes.find((n) => n.id === id)!;
 
-  // A node dims when it's off the picked path (focus) or filtered out by status.
+  // Selecting a node. additive=true (shift-click) toggles membership in the
+  // multi-selection without changing the inspector's focused node.
+  const selectNode = (id: string, additive = false) => {
+    if (additive) {
+      setSelectedIds((prev) => {
+        const next = new Set(prev);
+        if (next.has(id)) next.delete(id);
+        else next.add(id);
+        return next;
+      });
+    } else {
+      setSelected(id);
+      setSelectedIds(new Set([id]));
+      setInspectorOpen(true);
+    }
+  };
+
+  // --- Inspect-panel updaters ----------------------------------------------
+  const patchNode = (id: string, patch: Partial<SlideNode>) =>
+    setNodes((ns) => ns.map((n) => (n.id === id ? { ...n, ...patch } : n)));
+
+  const setStatus = (id: string, status: SceneStatus) =>
+    patchNode(id, { status });
+  const setRole = (id: string, role: SceneRole) => patchNode(id, { role });
+  const toggleLock = (id: string) =>
+    setNodes((ns) =>
+      ns.map((n) => (n.id === id ? { ...n, locked: !n.locked } : n)),
+    );
+  const addBlock = (id: string, type: ComponentType) => {
+    blockSeq.current += 1;
+    const block: ContentBlock = {
+      id: `${id}-b-${blockSeq.current}`,
+      type,
+      label: type,
+    };
+    setNodes((ns) =>
+      ns.map((n) =>
+        n.id === id ? { ...n, blocks: [...(n.blocks ?? []), block] } : n,
+      ),
+    );
+  };
+  const removeBlock = (id: string, blockId: string) =>
+    setNodes((ns) =>
+      ns.map((n) =>
+        n.id === id
+          ? { ...n, blocks: (n.blocks ?? []).filter((b) => b.id !== blockId) }
+          : n,
+      ),
+    );
+  // Relation lives on the edge into this node; editing it updates the canvas label.
+  const setRelation = (toId: string, relation: EdgeRelation) =>
+    setEdges((es) => es.map((e) => (e.to === toId ? { ...e, relation } : e)));
+
+  // --- Ghost (suggested branch) actions ------------------------------------
+  const acceptGhost = (id: string) => {
+    const parentId = edges.find((e) => e.to === id)?.from;
+    const siblingGhostIds = parentId
+      ? nodes
+          .filter(
+            (n) =>
+              n.ghost &&
+              n.id !== id &&
+              edges.some((e) => e.from === parentId && e.to === n.id),
+          )
+          .map((n) => n.id)
+      : [];
+    setNodes((ns) =>
+      ns.map((n) => {
+        if (n.id === id) return { ...n, ghost: false, discarded: false };
+        if (siblingGhostIds.includes(n.id)) return { ...n, discarded: true };
+        return n;
+      }),
+    );
+    setEdges((es) =>
+      es.map((e) => (e.to === id ? { ...e, dashed: false } : e)),
+    );
+  };
+  const discardGhost = (id: string) => patchNode(id, { discarded: true });
+  const reconsiderGhost = (id: string) => patchNode(id, { discarded: false });
+
+  // Delete: remove the node (and any subtree under it) for good.
+  const deleteNode = (id: string) => {
+    const toRemove = new Set<string>([id]);
+    let grew = true;
+    while (grew) {
+      grew = false;
+      edges.forEach((e) => {
+        if (toRemove.has(e.from) && !toRemove.has(e.to)) {
+          toRemove.add(e.to);
+          grew = true;
+        }
+      });
+    }
+    const nextNodes = nodes.filter((n) => !toRemove.has(n.id));
+    const nextEdges = edges.filter(
+      (e) => !toRemove.has(e.from) && !toRemove.has(e.to),
+    );
+    setEdges(nextEdges);
+    setNodes(tidyNodes(nextNodes, nextEdges));
+    if (selected && toRemove.has(selected)) setSelected(null);
+  };
+
+  const selectedNode = selected
+    ? (nodes.find((n) => n.id === selected) ?? null)
+    : null;
+  const parentEdge = selected
+    ? edges.find((e) => e.to === selected)
+    : undefined;
+
   const isNodeDimmed = (n: SlideNode) =>
-    (focusPicked && !PICKED_PATH.has(n.id)) || !activeStatuses.has(n.status);
+    (focusPicked && !PICKED_PATH.has(n.id)) ||
+    !activeStatuses.has(n.status) ||
+    Boolean(n.discarded);
   const isEdgeDimmed = (e: Edge) =>
     isNodeDimmed(findNode(e.from)) || isNodeDimmed(findNode(e.to));
+
+  const parentIds = new Set(edges.map((e) => e.from));
+  const leafNodes = nodes.filter(
+    (n) => !parentIds.has(n.id) && !n.discarded && !n.ghost,
+  );
+  const GEN_GAP = 32;
 
   const toggleStatus = (s: SceneStatus) =>
     setActiveStatuses((prev) => {
@@ -142,70 +318,50 @@ export function BoardView({ zoom, setZoom, onOpenEditor, onDesignApplied, initia
       return next;
     });
 
-  // Auto-tidy: reformat the tree (top-down by depth) IN PLACE — keep it
-  // centered where it already is so the camera/view doesn't move.
-  const autoTidy = () => {
-    const childrenMap = new Map<string, string[]>();
-    edges.forEach((e) =>
-      childrenMap.set(e.from, [...(childrenMap.get(e.from) ?? []), e.to]),
-    );
-    const hasParent = new Set(edges.map((e) => e.to));
-    const depth = new Map<string, number>();
-    const queue = nodes.filter((n) => !hasParent.has(n.id)).map((n) => n.id);
-    queue.forEach((id) => depth.set(id, 0));
-    for (let i = 0; i < queue.length; i++) {
-      const id = queue[i];
-      const d = depth.get(id) ?? 0;
-      (childrenMap.get(id) ?? []).forEach((c) => {
-        if (!depth.has(c)) {
-          depth.set(c, d + 1);
-          queue.push(c);
-        }
-      });
-    }
-    const levels = new Map<number, string[]>();
-    nodes.forEach((n) => {
-      const d = depth.get(n.id) ?? 0;
-      levels.set(d, [...(levels.get(d) ?? []), n.id]);
-    });
+  const autoTidy = () => setNodes((ns) => tidyNodes(ns, edges));
 
-    const vGap = 300;
-    const hGap = 380;
-
-    // Lay the tidy tree out around the origin first.
-    const raw = nodes.map((n) => {
-      const d = depth.get(n.id) ?? 0;
-      const level = levels.get(d) ?? [n.id];
-      const idx = level.indexOf(n.id);
-      const w = n.width ?? 320;
-      return {
-        id: n.id,
-        x: (idx - (level.length - 1) / 2) * hGap - w / 2,
-        y: d * vGap,
-        w,
-        h: n.height ?? 180,
-      };
-    });
-
-    // Anchor the layout to the ROOT's current position: the root stays
-    // exactly where it is, only the format below it changes. Nothing the
-    // user is looking at jumps, and the camera never moves.
-    const byId = new Map(raw.map((r) => [r.id, r]));
-    const rootNode = nodes.find((n) => !hasParent.has(n.id)) ?? nodes[0];
-    const rootRaw = rootNode ? byId.get(rootNode.id) : undefined;
-    const dx = rootNode && rootRaw ? rootNode.x - rootRaw.x : 0;
-    const dy = rootNode && rootRaw ? rootNode.y - rootRaw.y : 0;
-    setNodes((ns) =>
-      ns.map((n) => {
-        const r = byId.get(n.id);
-        return r ? { ...n, x: r.x + dx, y: r.y + dy } : n;
-      }),
-    );
+  const generateOptions = (parentId: string) => {
+    const parent = nodes.find((n) => n.id === parentId);
+    if (!parent) return;
+    const maxIndex = nodes.reduce((m, n) => Math.max(m, n.index), 0);
+    const k = genSeq.current;
+    genSeq.current += 2;
+    const picks = [
+      SUGGESTIONS[k % SUGGESTIONS.length],
+      SUGGESTIONS[(k + 1) % SUGGESTIONS.length],
+    ];
+    const newGhosts: SlideNode[] = picks.map((p, i) => ({
+      id: `gen-${genSeq.current}-${i}`,
+      index: maxIndex + 1 + i,
+      title: p.title,
+      kind: p.kind,
+      status: "draft",
+      ghost: true,
+      rationale: p.rationale,
+      x: parent.x,
+      y: parent.y + (parent.height ?? 180) + 300,
+      width: 280,
+      height: 168,
+      state: "ingredient",
+      thumb: "list",
+      elements: [],
+      candidates: [],
+      activeDesignId: null,
+    }));
+    const newEdges: Edge[] = newGhosts.map((g) => ({
+      from: parentId,
+      to: g.id,
+      relation: "sequence",
+      dashed: true,
+    }));
+    const nextEdges = [...edges, ...newEdges];
+    setEdges(nextEdges);
+    setNodes(tidyNodes([...nodes, ...newGhosts], nextEdges));
+    selectNode(parentId);
   };
 
-  // Outline click → select the node and fly the canvas to center it.
   const jumpTo = (id: string) => {
-    setSelected(id);
+    selectNode(id);
     const n = nodes.find((x) => x.id === id);
     const vp = viewportRef.current;
     if (!n || !vp) return;
@@ -219,30 +375,94 @@ export function BoardView({ zoom, setZoom, onOpenEditor, onDesignApplied, initia
 
   const onCanvasMouseDown = (e: React.MouseEvent) => {
     if ((e.target as HTMLElement).closest("[data-node]")) return;
-    setSelected(null);
-    panRef.current = { x: e.clientX - pan.x, y: e.clientY - pan.y };
-    const move = (ev: MouseEvent) => {
-      if (!panRef.current) return;
-      setPan({
-        x: ev.clientX - panRef.current.x,
-        y: ev.clientY - panRef.current.y,
+
+    if (canvasMode === "navigate") {
+      setSelected(null);
+      setSelectedIds(new Set());
+      panRef.current = { x: e.clientX - pan.x, y: e.clientY - pan.y };
+      const move = (ev: MouseEvent) => {
+        if (!panRef.current) return;
+        setPan({
+          x: ev.clientX - panRef.current.x,
+          y: ev.clientY - panRef.current.y,
+        });
+      };
+      const up = () => {
+        panRef.current = null;
+        window.removeEventListener("mousemove", move);
+        window.removeEventListener("mouseup", up);
+      };
+      window.addEventListener("mousemove", move);
+      window.addEventListener("mouseup", up);
+    } else {
+      // Select mode — draw a marquee box in canvas space.
+      const vp = viewportRef.current;
+      if (!vp) return;
+      const rect = vp.getBoundingClientRect();
+      const toCanvas = (cx: number, cy: number) => ({
+        x: (cx - rect.left - pan.x) / zoom,
+        y: (cy - rect.top - pan.y) / zoom,
       });
-    };
-    const up = () => {
-      panRef.current = null;
-      window.removeEventListener("mousemove", move);
-      window.removeEventListener("mouseup", up);
-    };
-    window.addEventListener("mousemove", move);
-    window.addEventListener("mouseup", up);
+      const origin = toCanvas(e.clientX, e.clientY);
+      selBoxOriginRef.current = { cx: origin.x, cy: origin.y };
+      setSelectionBox({ x1: origin.x, y1: origin.y, x2: origin.x, y2: origin.y });
+
+      const move = (ev: MouseEvent) => {
+        if (!selBoxOriginRef.current) return;
+        const cur = toCanvas(ev.clientX, ev.clientY);
+        const bx1 = Math.min(selBoxOriginRef.current.cx, cur.x);
+        const by1 = Math.min(selBoxOriginRef.current.cy, cur.y);
+        const bx2 = Math.max(selBoxOriginRef.current.cx, cur.x);
+        const by2 = Math.max(selBoxOriginRef.current.cy, cur.y);
+        setSelectionBox({ x1: selBoxOriginRef.current.cx, y1: selBoxOriginRef.current.cy, x2: cur.x, y2: cur.y });
+        const hits = nodes
+          .filter((n) => {
+            const nw = n.width ?? 320;
+            const nh = n.height ?? 180;
+            return n.x < bx2 && n.x + nw > bx1 && n.y < by2 && n.y + nh > by1;
+          })
+          .map((n) => n.id);
+        setSelectedIds(new Set(hits));
+      };
+      const up = (ev: MouseEvent) => {
+        if (selBoxOriginRef.current) {
+          const cur = toCanvas(ev.clientX, ev.clientY);
+          const bx1 = Math.min(selBoxOriginRef.current.cx, cur.x);
+          const by1 = Math.min(selBoxOriginRef.current.cy, cur.y);
+          const bx2 = Math.max(selBoxOriginRef.current.cx, cur.x);
+          const by2 = Math.max(selBoxOriginRef.current.cy, cur.y);
+          if (bx2 - bx1 <= 4 && by2 - by1 <= 4) {
+            setSelected(null);
+            setSelectedIds(new Set());
+          } else {
+            const hits = nodes
+              .filter((n) => {
+                const nw = n.width ?? 320;
+                const nh = n.height ?? 180;
+                return n.x < bx2 && n.x + nw > bx1 && n.y < by2 && n.y + nh > by1;
+              })
+              .map((n) => n.id);
+            setSelectedIds(new Set(hits));
+            if (hits.length === 1) {
+              setSelected(hits[0]);
+              setInspectorOpen(true);
+            }
+          }
+        }
+        selBoxOriginRef.current = null;
+        setSelectionBox(null);
+        window.removeEventListener("mousemove", move);
+        window.removeEventListener("mouseup", up);
+      };
+      window.addEventListener("mousemove", move);
+      window.addEventListener("mouseup", up);
+    }
   };
 
-  // Frame a set of nodes so the whole tree fits in the viewport, with a
-  // generous margin. The zoom is snapped DOWN to a multiple of 5%.
   const frameNodes = (list: SlideNode[]) => {
     const vp = viewportRef.current;
     if (!vp || list.length === 0) return;
-    const pad = 200; // generous margin → zooms out more
+    const pad = 200;
     const minX = Math.min(...list.map((n) => n.x));
     const minY = Math.min(...list.map((n) => n.y));
     const maxX = Math.max(...list.map((n) => n.x + (n.width ?? 320)));
@@ -254,7 +474,6 @@ export function BoardView({ zoom, setZoom, onOpenEditor, onDesignApplied, initia
       (vp.clientWidth - pad * 2) / spanX,
       (vp.clientHeight - pad * 2) / spanY,
     );
-    // snap down to a multiple of 5%, clamped to [30%, 100%]
     const pct = Math.min(100, Math.max(30, Math.floor((raw * 100) / 5) * 5));
     const z = pct / 100;
     setZoom(z);
@@ -264,21 +483,36 @@ export function BoardView({ zoom, setZoom, onOpenEditor, onDesignApplied, initia
     });
   };
 
-  // Fit-to-view: move/zoom so the entire tree is visible (no rearrange).
   const fitToView = () => frameNodes(nodes);
 
-  // Zoom in/out in 5% steps, snapped to multiples of 5.
   const zoomBy = (dir: number) => {
     const pct = Math.round((zoom * 100) / 5) * 5;
     setZoom(Math.min(200, Math.max(30, pct + dir * 5)) / 100);
   };
+
+  // Drilling into a scene's content swaps the whole board for its content graph.
+  const contentScene = contentSceneId
+    ? (nodes.find((n) => n.id === contentSceneId) ?? null)
+    : null;
+  if (contentScene) {
+    return (
+      <div className="flex-1 flex flex-col min-w-0 relative">
+        <ContentGraphView
+          scene={contentScene}
+          onBack={() => setContentSceneId(null)}
+          onAddBlock={addBlock}
+          onRemoveBlock={removeBlock}
+        />
+      </div>
+    );
+  }
 
   return (
     <div className="flex-1 flex flex-col min-w-0 relative">
       {/* Canvas */}
       <div
         ref={viewportRef}
-        className="flex-1 relative overflow-hidden dot-grid cursor-grab active:cursor-grabbing"
+        className={`flex-1 relative overflow-hidden dot-grid ${canvasMode === "navigate" ? "cursor-grab active:cursor-grabbing" : "cursor-crosshair"}`}
         onMouseDown={onCanvasMouseDown}
       >
         <div
@@ -324,6 +558,24 @@ export function BoardView({ zoom, setZoom, onOpenEditor, onDesignApplied, initia
                 />
               );
             })}
+            {/* Short connectors down to each leaf's Generate-next node */}
+            {leafNodes.map((n) => {
+              const cx = n.x + (n.width ?? 320) / 2;
+              const y1 = n.y + (n.height ?? 180);
+              const y2 = y1 + GEN_GAP;
+              return (
+                <path
+                  key={`gen-arrow-${n.id}`}
+                  d={`M ${cx} ${y1} L ${cx} ${y2}`}
+                  fill="none"
+                  stroke="var(--accent)"
+                  strokeOpacity={isNodeDimmed(n) ? 0.2 : 0.55}
+                  strokeWidth="1.75"
+                  strokeDasharray="5 4"
+                  markerEnd="url(#arrowhead)"
+                />
+              );
+            })}
           </svg>
 
           {/* Edge relation labels */}
@@ -350,29 +602,78 @@ export function BoardView({ zoom, setZoom, onOpenEditor, onDesignApplied, initia
           })}
 
           {/* Nodes */}
-          {nodes.map((n) => (
-            <div key={n.id} data-node>
-              <SlideCard
-                node={n}
-                selected={selected === n.id}
-                dimmed={isNodeDimmed(n)}
-                isGeneratingDesign={generatingNodeId === n.id}
-                onSelect={() => setSelected(n.id)}
-                onOpenEditor={() => onOpenEditor(n.id)}
-                onDesignBucket={() => handleDesignBucket(n.id)}
-                onMove={(x, y) =>
-                  setNodes((ns) =>
-                    ns.map((m) => (m.id === n.id ? { ...m, x, y } : m)),
-                  )
-                }
-                zoom={zoom}
-              />
-            </div>
-          ))}
+          {nodes.map((n) => {
+            const onMove = (x: number, y: number) =>
+              setNodes((ns) =>
+                ns.map((m) => (m.id === n.id ? { ...m, x, y } : m)),
+              );
+            return (
+              <div key={n.id} data-node>
+                {n.ghost ? (
+                  <GhostCard
+                    node={n}
+                    selected={selectedIds.has(n.id)}
+                    dimmed={isNodeDimmed(n)}
+                    onSelect={() => selectNode(n.id)}
+                    onMove={onMove}
+                    onAccept={() => acceptGhost(n.id)}
+                    onDiscard={() => discardGhost(n.id)}
+                    onReconsider={() => reconsiderGhost(n.id)}
+                    onDelete={() => deleteNode(n.id)}
+                    zoom={zoom}
+                  />
+                ) : (
+                  <SlideCard
+                    node={n}
+                    selected={selectedIds.has(n.id)}
+                    dimmed={isNodeDimmed(n)}
+                    onSelect={(shiftKey) => selectNode(n.id, shiftKey)}
+                    onOpenEditor={() => onOpenEditor(n.id)}
+                    onMove={onMove}
+                    zoom={zoom}
+                  />
+                )}
+              </div>
+            );
+          })}
+
+          {/* Generate-next nodes — one per leaf, just below the card */}
+          {leafNodes.map((n) => {
+            const cx = n.x + (n.width ?? 320) / 2;
+            const top = n.y + (n.height ?? 180) + GEN_GAP;
+            return (
+              <div
+                key={`gen-node-${n.id}`}
+                data-node
+                className="absolute"
+                style={{ left: cx - 84, top }}
+              >
+                <GenerateNode
+                  onClick={() => generateOptions(n.id)}
+                  dimmed={isNodeDimmed(n)}
+                />
+              </div>
+            );
+          })}
+
+          {/* Marquee selection box (canvas space) */}
+          {selectionBox && (
+            <div
+              className="absolute pointer-events-none border border-(--accent) bg-accent-soft opacity-60"
+              style={{
+                left: Math.min(selectionBox.x1, selectionBox.x2),
+                top: Math.min(selectionBox.y1, selectionBox.y2),
+                width: Math.abs(selectionBox.x2 - selectionBox.x1),
+                height: Math.abs(selectionBox.y2 - selectionBox.y1),
+              }}
+            />
+          )}
         </div>
 
         {/* Left tool rail */}
         <GraphToolRail
+          canvasMode={canvasMode}
+          onSetMode={setCanvasMode}
           outlineOpen={outlineOpen}
           filterOpen={filterOpen}
           onToggleOutline={() => setOutlineOpen((v) => !v)}
@@ -427,6 +728,28 @@ export function BoardView({ zoom, setZoom, onOpenEditor, onDesignApplied, initia
           />
         )}
 
+        {/* Right scene panel (Chat / Inspect / Argument) */}
+        {inspectorOpen && (
+          <ScenePanel
+            node={selectedNode}
+            selectedCount={selectedIds.size}
+            parentRelation={parentEdge?.relation ?? null}
+            hasParent={Boolean(parentEdge)}
+            onClose={() => setInspectorOpen(false)}
+            onChangeStatus={setStatus}
+            onChangeRole={setRole}
+            onChangeRelation={setRelation}
+            onToggleLock={toggleLock}
+            onAddBlock={addBlock}
+            onRemoveBlock={removeBlock}
+            onOpenContent={setContentSceneId}
+            onAccept={acceptGhost}
+            onDiscard={discardGhost}
+            onReconsider={reconsiderGhost}
+            onDelete={deleteNode}
+          />
+        )}
+
         {/* Floating zoom pill */}
         <TooltipProvider
           delayDuration={100}
@@ -464,57 +787,6 @@ export function BoardView({ zoom, setZoom, onOpenEditor, onDesignApplied, initia
           </div>
         </TooltipProvider>
       </div>
-
-      {/* ── Candidate-picker overlay ──────────────────────────────────────────
-           Shows when a bucket has been designed and the user needs to pick a layout.
-           CANDIDATE-PICKER UI: replace this minimal overlay with a richer gallery
-           (slide thumbnail previews) when the design system is ready.
-           For now: text labels + "Use this design" buttons. */}
-      {designingNodeId && (() => {
-        const node = nodes.find((n) => n.id === designingNodeId);
-        const candidates = node?.candidates ?? [];
-        return (
-          <div className="absolute inset-0 bg-ink/40 backdrop-blur-sm flex items-center justify-center z-50">
-            <div className="bg-card border border-border rounded-2xl shadow-[0_8px_40px_-8px_rgba(0,0,0,0.3)] w-[560px] max-h-[80vh] flex flex-col overflow-hidden">
-              <div className="flex items-center justify-between px-5 py-4 border-b border-border shrink-0">
-                <div>
-                  <div className="font-semibold text-[15px] text-ink">Choose a layout</div>
-                  <div className="text-[12px] text-muted-foreground mt-0.5 font-mono truncate max-w-[360px]">
-                    {node?.title}
-                  </div>
-                </div>
-                <button
-                  onClick={() => setDesigningNodeId(null)}
-                  className="w-8 h-8 flex items-center justify-center rounded-lg hover:bg-canvas/60 text-muted-foreground"
-                >
-                  <X size={14} />
-                </button>
-              </div>
-              <div className="flex-1 overflow-y-auto p-4 grid grid-cols-2 gap-3">
-                {candidates.map((cand) => (
-                  <button
-                    key={cand.id}
-                    data-no-drag
-                    onClick={() => handlePickCandidate(designingNodeId, cand)}
-                    className="group text-left rounded-xl border border-border bg-white hover:border-[color:var(--accent)] hover:shadow-[0_0_0_2px_var(--accent-soft)] transition-all overflow-hidden"
-                  >
-                    {/* Preview thumbnail — placeholder until SlideThumb renders elements */}
-                    <div className="aspect-[16/9] bg-canvas/60 border-b border-border flex items-center justify-center text-muted-foreground text-[11px] font-mono">
-                      {cand.label}
-                    </div>
-                    <div className="px-3 py-2.5 flex items-center justify-between">
-                      <span className="text-[13px] font-semibold text-ink">{cand.label}</span>
-                      <span className="text-[11px] text-[color:var(--accent)] font-semibold opacity-0 group-hover:opacity-100 transition-opacity">
-                        Use this →
-                      </span>
-                    </div>
-                  </button>
-                ))}
-              </div>
-            </div>
-          </div>
-        );
-      })()}
     </div>
   );
 }

@@ -279,7 +279,7 @@ export function EditorView({
       : pool.filter((c) => !c.assignedSceneId && c.sourceRef === startNodeId);
 
     if (assignedNodes.length > 0) {
-      const materializedRoot = materializeContentNodes(assignedNodes, startNodeId);
+      const materializedRoot = materializeContentNodes(assignedNodes, startNodeId, target.title);
       dispatch({
         type: "commit",
         updater: (prev) =>

@@ -504,6 +504,10 @@ const MAT_COL_SPAN  = Math.round(GRID_COLS * 0.88);   // ~8800 — 88% width
 const MAT_ROW_START = Math.round(GRID_ROWS * 0.07);   // ~394  — 7% top margin
 const MAT_ROW_TOTAL = Math.round(GRID_ROWS * 0.85);   // ~4781 — usable height
 const MAT_ROW_GAP   = Math.round(GRID_ROWS * 0.025);  // ~140  — gap between items
+// When a title is present, it occupies a compact header band and content starts below it.
+const MAT_TITLE_ROW_SPAN    = Math.round(GRID_ROWS * 0.13);  // ~731  — compact title height
+const MAT_CONTENT_ROW_START = Math.round(GRID_ROWS * 0.24);  // ~1350 — content top when title present
+const MAT_CONTENT_ROW_TOTAL = Math.round(GRID_ROWS * 0.68);  // ~3825 — content height when title present
 
 function contentNodeToLeaf(cn: ContentNode, placement: GridPlacement): LeafNode {
   if (cn.kind === 'image') {
@@ -586,19 +590,53 @@ export function makeTitleOnlyRoot(sceneId: string, title: string): StackNode {
 export function materializeContentNodes(
   contentNodes: ContentNode[],
   sceneId: string,
+  title?: string,
 ): StackNode {
-  const n = contentNodes.length;
-  const totalGap = MAT_ROW_GAP * Math.max(0, n - 1);
-  const rowPerItem = n > 0 ? Math.floor((MAT_ROW_TOTAL - totalGap) / n) : MAT_ROW_TOTAL;
+  const children: LeafNode[] = [];
 
-  const leaves = contentNodes.map((cn, i): LeafNode => {
-    const row = MAT_ROW_START + i * (rowPerItem + MAT_ROW_GAP);
-    return contentNodeToLeaf(cn, {
-      col: MAT_COL_START,
+  if (title) {
+    children.push({
+      kind: 'leaf',
+      id: makeLeafId(),
+      placement: {
+        col:     MAT_COL_START,
+        row:     MAT_ROW_START,
+        colSpan: MAT_COL_SPAN,
+        rowSpan: MAT_TITLE_ROW_SPAN,
+      },
+      block: {
+        role: 'text',
+        text: title,
+        style: {
+          fontSize: 60,
+          fontWeight: 700,
+          fontStyle: 'normal',
+          textDecoration: 'none',
+          textAlign: 'left',
+          color: 'oklch(0.24 0.009 185)',
+          lineHeight: 1.1,
+        },
+      },
+      zIndex: 1,
+      opacity: 1,
+      rotation: 0,
+    });
+  }
+
+  const n = contentNodes.length;
+  const rowStart = title ? MAT_CONTENT_ROW_START : MAT_ROW_START;
+  const rowTotal = title ? MAT_CONTENT_ROW_TOTAL : MAT_ROW_TOTAL;
+  const totalGap = MAT_ROW_GAP * Math.max(0, n - 1);
+  const rowPerItem = n > 0 ? Math.floor((rowTotal - totalGap) / n) : rowTotal;
+
+  contentNodes.forEach((cn, i) => {
+    const row = rowStart + i * (rowPerItem + MAT_ROW_GAP);
+    children.push(contentNodeToLeaf(cn, {
+      col:     MAT_COL_START,
       row,
       colSpan: MAT_COL_SPAN,
       rowSpan: rowPerItem,
-    });
+    }));
   });
 
   return {
@@ -606,7 +644,7 @@ export function materializeContentNodes(
     id: `root-${sceneId}`,
     dir: 'col',
     gap: 0,
-    children: leaves,
+    children,
   };
 }
 

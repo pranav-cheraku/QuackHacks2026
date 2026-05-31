@@ -1,12 +1,12 @@
 import { useState, useEffect, useRef, useCallback, useReducer } from "react";
 import type React from "react";
 import {
-  Undo2, Redo2, Bold, Italic, Underline,
+  Undo2, Redo2, Italic, Underline,
   AlignLeft, AlignCenter, AlignRight,
   Type, ImageIcon, Square, ChevronDown,
   Plus, Sparkles, CheckCircle2, Loader2,
   Paperclip, Mic, Send, LayoutTemplate,
-  Layers, SlidersHorizontal, Grid3x3, Trash2, Copy,
+  Layers, Grid3x3, Trash2, Copy,
 } from "lucide-react";
 import { INITIAL_NODES } from "@/lib/projektor-data";
 import type { SlideNode } from "@/lib/projektor-data";
@@ -17,6 +17,23 @@ import type { SlideElement, TextStyle } from "@/lib/slide-model";
 import { gridToCSS, GRID_COLS, GRID_ROWS, snap, SNAP_STEP } from "@/lib/grid";
 import type { GridPlacement } from "@/lib/grid";
 import { SLIDE_ELEMENTS } from "@/lib/initial-slides";
+import { SLIDE_CANDIDATES } from "@/lib/slide-candidates";
+
+// ── Module-level helpers / constants ─────────────────────────────────────────
+function toHex(c?: string): string {
+  if (!c) return "#000000";
+  if (c.startsWith("#")) return c;
+  return "#000000"; // oklch/hsl fall back; CSS still renders the real color via style=
+}
+
+const WEIGHT_OPTIONS = [
+  { label: "Thin",     value: 300 },
+  { label: "Regular",  value: 400 },
+  { label: "Medium",   value: 500 },
+  { label: "SemiBold", value: 600 },
+  { label: "Bold",     value: 700 },
+  { label: "ExtraBold",value: 800 },
+] as const;
 
 // ─── Undo/redo history ────────────────────────────────────────────────────────
 type History = { past: SlideNode[][]; present: SlideNode[]; future: SlideNode[][] };
@@ -61,7 +78,12 @@ export function EditorView({ startNodeId }: Props) {
     null,
     (): History => ({
       past: [],
-      present: INITIAL_NODES.map((n) => ({ ...n, elements: SLIDE_ELEMENTS[n.id] ?? [] })),
+      present: INITIAL_NODES.map((n) => ({
+        ...n,
+        elements:     SLIDE_ELEMENTS[n.id]    ?? [],
+        candidates:   SLIDE_CANDIDATES[n.id]  ?? [],
+        activeDesignId: SLIDE_CANDIDATES[n.id]?.[0]?.id ?? null,
+      })),
       future: [],
     })
   );
@@ -144,6 +166,8 @@ export function EditorView({ startNodeId }: Props) {
       components: [],
       thumb: "title",
       elements: [],
+      candidates: [],
+      activeDesignId: null,
     };
     dispatch({ type: "commit", updater: (prev) => [...prev, newSlide] });
     setActiveId(newSlide.id);
@@ -180,8 +204,34 @@ export function EditorView({ startNodeId }: Props) {
     updateEl(id, (e) => ({ ...e, text: { ...e.text!, content } }));
     setEditingElId(null);
   };
-  const bringForward = (id: string) => updateEl(id, (e) => ({ ...e, zIndex: e.zIndex + 1 }));
-  const sendBack     = (id: string) => updateEl(id, (e) => ({ ...e, zIndex: Math.max(0, e.zIndex - 1) }));
+
+  const bringForward = useCallback((id: string) => {
+    updateSlide(activeId, (s) => {
+      const maxZ = s.elements.reduce((m, e) => Math.max(m, e.zIndex), 0);
+      return { ...s, elements: s.elements.map((e) => e.id === id ? { ...e, zIndex: maxZ + 1 } : e) };
+    });
+  }, [activeId, updateSlide]);
+
+  const sendBack = useCallback((id: string) => {
+    updateSlide(activeId, (s) => {
+      const minZ = s.elements.reduce((m, e) => Math.min(m, e.zIndex), Infinity);
+      return { ...s, elements: s.elements.map((e) => e.id === id ? { ...e, zIndex: Math.max(0, minZ - 1) } : e) };
+    });
+  }, [activeId, updateSlide]);
+
+  const applyCandidate = useCallback((candidateId: string) => {
+    updateSlide(activeId, (s) => {
+      const cand = s.candidates.find((c) => c.id === candidateId);
+      if (!cand) return s;
+      return {
+        ...s,
+        elements: cand.elements.map((el) => ({ ...el, id: nextId() })),
+        activeDesignId: candidateId,
+      };
+    });
+    setSelectedElId(null);
+    setEditingElId(null);
+  }, [activeId, updateSlide]);
 
   // ── Render ────────────────────────────────────────────────────────────────
   return (
@@ -204,12 +254,11 @@ export function EditorView({ startNodeId }: Props) {
           }
         />
         <Sep />
-        <ToolBtn
-          active={selectedEl?.text?.fontWeight === 700}
-          onClick={() => selectedEl && updateEl(selectedEl.id, (e) => ({
-            ...e, text: { ...e.text!, fontWeight: e.text!.fontWeight >= 700 ? 400 : 700 },
-          }))}
-        ><Bold size={12} /></ToolBtn>
+        <WeightSelect
+          value={selectedEl?.text?.fontWeight ?? 400}
+          disabled={!selectedEl?.text}
+          onChange={(w) => selectedEl && updateEl(selectedEl.id, (e) => ({ ...e, text: { ...e.text!, fontWeight: w } }))}
+        />
         <ToolBtn
           active={selectedEl?.text?.fontStyle === "italic"}
           onClick={() => selectedEl && updateEl(selectedEl.id, (e) => ({
@@ -234,6 +283,21 @@ export function EditorView({ startNodeId }: Props) {
             {[<AlignLeft size={12} />, <AlignCenter size={12} />, <AlignRight size={12} />][i]}
           </ToolBtn>
         ))}
+        <Sep />
+        {/* ── Per-element color & opacity ── */}
+        <ColorSwatch
+          color={selectedEl?.text?.color ?? selectedEl?.shape?.fill}
+          label={selectedEl?.text ? "Text color" : selectedEl?.shape ? "Fill color" : "Color"}
+          onChange={(hex) => {
+            if (!selectedEl) return;
+            if (selectedEl.text)  updateEl(selectedEl.id, (e) => ({ ...e, text:  { ...e.text!,  color: hex } }));
+            if (selectedEl.shape) updateEl(selectedEl.id, (e) => ({ ...e, shape: { ...e.shape!, fill:  hex } }));
+          }}
+        />
+        <OpacityInput
+          value={selectedEl?.opacity}
+          onChange={(o) => selectedEl && updateEl(selectedEl.id, (e) => ({ ...e, opacity: o }))}
+        />
         <Sep />
         <ToolBtn title="Add text"  onClick={() => addEl(makeTextElement())}><Type size={12} /></ToolBtn>
         <ToolBtn title="Add image" onClick={() => addEl(makeImageElement())}><ImageIcon size={12} /></ToolBtn>
@@ -355,7 +419,7 @@ export function EditorView({ startNodeId }: Props) {
             {(
               [
                 { id: "agent",   label: "Agent",   icon: Sparkles },
-                { id: "design",  label: "Design",  icon: SlidersHorizontal },
+                { id: "design",  label: "Designs", icon: LayoutTemplate },
                 { id: "arrange", label: "Arrange", icon: Layers },
               ] as { id: RightTab; label: string; icon: React.FC<{ size: number }> }[]
             ).map(({ id, label, icon: Icon }) => (
@@ -375,9 +439,9 @@ export function EditorView({ startNodeId }: Props) {
           <div className="flex-1 flex flex-col min-h-0 overflow-hidden">
             {rightTab === "agent"   && <AgentPanel />}
             {rightTab === "design"  && (
-              <DesignPanel
-                el={selectedEl}
-                onChange={(fn) => selectedEl && updateEl(selectedEl.id, fn)}
+              <DesignsPanel
+                slide={activeSlide}
+                onApply={applyCandidate}
               />
             )}
             {rightTab === "arrange" && (
@@ -719,118 +783,64 @@ function AgentPanel() {
   );
 }
 
-// ─── Design panel ─────────────────────────────────────────────────────────────
-interface DesignPanelProps {
-  el: SlideElement | null;
-  onChange: (fn: (e: SlideElement) => SlideElement) => void;
-}
-
-const WEIGHTS = [
-  { label: "Regular",   value: 400 },
-  { label: "Medium",    value: 500 },
-  { label: "SemiBold",  value: 600 },
-  { label: "Bold",      value: 700 },
-  { label: "ExtraBold", value: 800 },
-];
-
-function DesignPanel({ el, onChange }: DesignPanelProps) {
-  const t  = el?.text;
-  const sh = el?.shape;
-
-  const setT = <K extends keyof TextStyle>(key: K, value: TextStyle[K]) =>
-    onChange((e) => ({ ...e, text: { ...e.text!, [key]: value } }));
-
-  // Convert any color to hex for the color input (falls back gracefully)
-  const toHex = (c?: string) => {
-    if (!c) return "#000000";
-    if (c.startsWith("#")) return c;
-    return "#000000";
-  };
+// ─── Designs panel ────────────────────────────────────────────────────────────
+function DesignsPanel({
+  slide,
+  onApply,
+}: {
+  slide: import("@/lib/projektor-data").SlideNode;
+  onApply: (candidateId: string) => void;
+}) {
+  if (slide.candidates.length === 0) {
+    return (
+      <div className="flex-1 flex flex-col items-center justify-center gap-3 p-5 text-center">
+        <LayoutTemplate size={22} className="text-muted-foreground" strokeWidth={1.5} />
+        <p className="text-[11px] text-muted-foreground leading-snug">
+          No design candidates yet.
+          <br />The agent will generate alternatives here.
+        </p>
+      </div>
+    );
+  }
 
   return (
-    <div className="flex-1 overflow-y-auto p-3 space-y-4 text-[11px]">
-      {!el && <div className="text-center text-muted-foreground py-8 text-[11px]">Select an element to edit its style</div>}
-
-      {el && t && (
-        <Section label="Typography">
-          <Row label="Size">
-            <div className="flex items-center border border-border rounded h-6">
-              <button className="px-1.5 text-muted-foreground hover:text-ink" onClick={() => setT("fontSize", Math.max(8, t.fontSize - 2))}>−</button>
-              <span className="px-2 font-mono text-[10px] border-x border-border w-10 text-center">{t.fontSize}</span>
-              <button className="px-1.5 text-muted-foreground hover:text-ink" onClick={() => setT("fontSize", t.fontSize + 2)}>+</button>
+    <div className="flex-1 overflow-y-auto p-2.5 space-y-2.5">
+      {slide.candidates.map((cand) => {
+        const isActive = slide.activeDesignId === cand.id;
+        return (
+          <button
+            key={cand.id}
+            onClick={() => onApply(cand.id)}
+            className={`w-full text-left rounded-md border-2 overflow-hidden transition-all ${
+              isActive
+                ? "border-[color:var(--accent-teal)] shadow-sm"
+                : "border-border hover:border-[color:var(--accent-teal)]/50"
+            }`}
+          >
+            {/* Mini slide preview — reuses SlideThumb with candidate's elements */}
+            <div className="relative w-full overflow-hidden bg-white" style={{ aspectRatio: "16/9" }}>
+              <SlideThumb node={{ ...slide, elements: cand.elements }} />
             </div>
-          </Row>
-          <Row label="Weight">
-            <select
-              value={t.fontWeight}
-              onChange={(e) => setT("fontWeight", Number(e.target.value))}
-              className="border border-border rounded px-1.5 h-6 text-[10px] bg-card text-ink outline-none focus:border-[color:var(--accent-teal)]"
+            <div
+              className={`flex items-center justify-between px-2 py-1.5 text-[10px] font-medium ${
+                isActive ? "bg-[color:var(--accent-soft)]" : "bg-chrome"
+              }`}
             >
-              {WEIGHTS.map((w) => <option key={w.value} value={w.value}>{w.label}</option>)}
-            </select>
-          </Row>
-          <Row label="Align">
-            <div className="flex border border-border rounded overflow-hidden">
-              {(["left", "center", "right"] as const).map((a, i) => (
-                <button
-                  key={a}
-                  onClick={() => setT("textAlign", a)}
-                  className={`w-7 h-6 flex items-center justify-center transition-colors ${t.textAlign === a ? "bg-[color:var(--accent-teal)] text-white" : "text-muted-foreground hover:text-ink"}`}
-                >
-                  {[<AlignLeft size={10} />, <AlignCenter size={10} />, <AlignRight size={10} />][i]}
-                </button>
-              ))}
+              <span className={isActive ? "font-semibold text-ink" : "text-muted-foreground"}>
+                {cand.label}
+              </span>
+              {isActive && (
+                <span className="text-[9px] font-mono uppercase tracking-wide" style={{ color: "var(--accent-teal)" }}>
+                  Active
+                </span>
+              )}
             </div>
-          </Row>
-          <Row label="Color">
-            <div className="flex items-center gap-1.5">
-              <input
-                type="color"
-                value={toHex(t.color)}
-                onChange={(e) => setT("color", e.target.value)}
-                className="w-6 h-6 rounded border border-border cursor-pointer"
-              />
-              <span className="font-mono text-[10px] text-muted-foreground truncate max-w-[100px]">{t.color}</span>
-            </div>
-          </Row>
-        </Section>
-      )}
-
-      {el && sh && (
-        <Section label="Shape">
-          <Row label="Fill">
-            <input
-              type="color"
-              value={toHex(sh.fill)}
-              onChange={(e) => onChange((el) => ({ ...el, shape: { ...el.shape!, fill: e.target.value } }))}
-              className="w-6 h-6 rounded border border-border cursor-pointer"
-            />
-          </Row>
-          <Row label="Radius">
-            <div className="flex items-center gap-1.5">
-              <input
-                type="range" min={0} max={100} value={sh.borderRadius}
-                onChange={(e) => onChange((el) => ({ ...el, shape: { ...el.shape!, borderRadius: Number(e.target.value) } }))}
-                className="w-24 accent-[color:var(--accent-teal)]"
-              />
-              <span className="font-mono text-[10px] w-6">{sh.borderRadius}</span>
-            </div>
-          </Row>
-        </Section>
-      )}
-
-      {el && (
-        <Section label="Opacity">
-          <div className="flex items-center gap-2">
-            <input
-              type="range" min={0} max={1} step={0.05} value={el.opacity}
-              onChange={(e) => onChange((el) => ({ ...el, opacity: Number(e.target.value) }))}
-              className="flex-1 accent-[color:var(--accent-teal)]"
-            />
-            <span className="font-mono text-[10px] w-8 text-right">{Math.round(el.opacity * 100)}%</span>
-          </div>
-        </Section>
-      )}
+          </button>
+        );
+      })}
+      <p className="text-[10px] text-center text-muted-foreground pt-1 pb-2">
+        AI-generated candidates will appear here
+      </p>
     </div>
   );
 }
@@ -913,10 +923,25 @@ function ArrangePanel({ el, onChange, onBringForward, onSendBack }: ArrangePanel
           <Section label="Layer">
             <Row label="Z-index"><span className="font-mono text-[10px]">{el.zIndex}</span></Row>
             <div className="flex gap-1.5 mt-1">
-              <button onClick={onBringForward} className="flex-1 py-1.5 text-[10px] font-medium border border-border rounded hover:bg-canvas/50 transition-colors">Bring forward</button>
-              <button onClick={onSendBack}     className="flex-1 py-1.5 text-[10px] font-medium border border-border rounded hover:bg-canvas/50 transition-colors">Send back</button>
+              <button onClick={onBringForward} className="flex-1 py-1.5 text-[10px] font-medium border border-border rounded hover:bg-canvas/50 transition-colors">Bring to Front</button>
+              <button onClick={onSendBack}     className="flex-1 py-1.5 text-[10px] font-medium border border-border rounded hover:bg-canvas/50 transition-colors">Send to Back</button>
             </div>
           </Section>
+
+          {el.shape && (
+            <Section label="Shape">
+              <Row label="Radius">
+                <div className="flex items-center gap-1.5">
+                  <input
+                    type="range" min={0} max={100} value={el.shape.borderRadius}
+                    onChange={(e) => onChange((el) => ({ ...el, shape: { ...el.shape!, borderRadius: Number(e.target.value) } }))}
+                    className="w-20 accent-[color:var(--accent-teal)]"
+                  />
+                  <span className="font-mono text-[10px] w-6">{el.shape.borderRadius}</span>
+                </div>
+              </Row>
+            </Section>
+          )}
         </>
       )}
     </div>
@@ -945,6 +970,90 @@ function ToolBtn({ children, title, active, dimmed, onClick }: {
   );
 }
 function Sep() { return <div className="w-px h-5 bg-border mx-1 shrink-0" />; }
+
+function WeightSelect({ value, disabled, onChange }: {
+  value: number; disabled?: boolean; onChange: (w: number) => void;
+}) {
+  return (
+    <select
+      value={value}
+      disabled={disabled}
+      onChange={(e) => onChange(Number(e.target.value))}
+      onClick={(e) => e.stopPropagation()}
+      className={`h-7 px-1 text-[10px] border border-border rounded bg-card text-ink outline-none cursor-pointer transition-opacity ${
+        disabled ? "opacity-30 cursor-default" : "focus:border-[color:var(--accent-teal)]"
+      }`}
+      style={{ minWidth: 68 }}
+    >
+      {WEIGHT_OPTIONS.map((w) => (
+        <option key={w.value} value={w.value}>{w.label}</option>
+      ))}
+    </select>
+  );
+}
+
+function ColorSwatch({ color, label, onChange }: {
+  color: string | undefined; label?: string; onChange: (hex: string) => void;
+}) {
+  const disabled = color === undefined;
+  return (
+    <label
+      title={label ?? "Color"}
+      className={`relative w-7 h-7 rounded border border-border flex items-center justify-center cursor-pointer shrink-0 transition-opacity ${
+        disabled ? "opacity-30 pointer-events-none" : "hover:border-[color:var(--accent-teal)]"
+      }`}
+    >
+      {/* Visible swatch — CSS renders the real color (oklch, hsl, hex all work) */}
+      <div className="w-4 h-4 rounded-sm shadow-sm" style={{ background: color ?? "#ccc" }} />
+      {/* Hidden native picker — value needs hex; picker updates to hex on pick */}
+      <input
+        type="color"
+        value={toHex(color)}
+        disabled={disabled}
+        onChange={(e) => onChange(e.target.value)}
+        className="absolute inset-0 opacity-0 cursor-pointer w-full h-full"
+      />
+    </label>
+  );
+}
+
+function OpacityInput({ value, onChange }: {
+  value: number | undefined; onChange: (o: number) => void;
+}) {
+  const pct = value !== undefined ? Math.round(value * 100) : undefined;
+  const [draft, setDraft] = useState(pct?.toString() ?? "");
+  useEffect(() => { setDraft(pct?.toString() ?? ""); }, [pct]);
+
+  const commit = (raw: string) => {
+    const n = parseInt(raw, 10);
+    if (Number.isFinite(n) && n >= 0 && n <= 100) onChange(n / 100);
+    else setDraft(pct?.toString() ?? "");
+  };
+
+  return (
+    <div
+      className={`flex items-center border border-border rounded h-7 overflow-hidden transition-opacity ${
+        value === undefined ? "opacity-30" : ""
+      }`}
+    >
+      <input
+        type="text"
+        value={draft}
+        disabled={value === undefined}
+        placeholder="—"
+        onChange={(e) => setDraft(e.target.value)}
+        onBlur={(e) => commit(e.target.value)}
+        onKeyDown={(e) => {
+          e.stopPropagation();
+          if (e.key === "Enter") { commit((e.target as HTMLInputElement).value); (e.target as HTMLInputElement).blur(); }
+          if (e.key === "Escape") { setDraft(pct?.toString() ?? ""); (e.target as HTMLInputElement).blur(); }
+        }}
+        className="w-7 px-1 text-[11px] font-mono text-center bg-transparent outline-none text-ink placeholder:text-muted-foreground"
+      />
+      <span className="pr-1 text-[10px] text-muted-foreground font-mono">%</span>
+    </div>
+  );
+}
 const FONT_SIZE_PRESETS = [8, 10, 11, 12, 14, 16, 18, 20, 24, 28, 32, 36, 40, 48, 60, 72, 96];
 
 function FontSizeControl({ value, onChange }: { value: number | undefined; onChange: (n: number) => void }) {

@@ -29,6 +29,12 @@ export const MEDIA_COMPONENTS: ComponentType[] = [
 
 export type SlideState = "rendered" | "ingredient";
 
+export interface SlideCandidate {
+  id: string;
+  label: string;
+  elements: import("./slide-model").SlideElement[];
+}
+
 export interface SlideNode {
   id: string;
   index: number;
@@ -42,6 +48,8 @@ export interface SlideNode {
   width?: number;
   height?: number;
   elements: import("./slide-model").SlideElement[];
+  candidates: SlideCandidate[];
+  activeDesignId: string | null;
 }
 
 export interface Edge {
@@ -74,6 +82,8 @@ export const INITIAL_NODES: SlideNode[] = [
     width: 280,
     height: 170,
     elements: [],
+    candidates: [],
+    activeDesignId: null,
   },
   {
     id: "n2",
@@ -88,6 +98,8 @@ export const INITIAL_NODES: SlideNode[] = [
     width: 280,
     height: 170,
     elements: [],
+    candidates: [],
+    activeDesignId: null,
   },
   {
     id: "n3",
@@ -102,6 +114,8 @@ export const INITIAL_NODES: SlideNode[] = [
     width: 260,
     height: 220,
     elements: [],
+    candidates: [],
+    activeDesignId: null,
   },
   {
     id: "n4",
@@ -116,6 +130,8 @@ export const INITIAL_NODES: SlideNode[] = [
     width: 280,
     height: 170,
     elements: [],
+    candidates: [],
+    activeDesignId: null,
   },
   {
     id: "n5",
@@ -130,6 +146,8 @@ export const INITIAL_NODES: SlideNode[] = [
     width: 280,
     height: 170,
     elements: [],
+    candidates: [],
+    activeDesignId: null,
   },
   {
     id: "n6",
@@ -144,6 +162,8 @@ export const INITIAL_NODES: SlideNode[] = [
     width: 280,
     height: 170,
     elements: [],
+    candidates: [],
+    activeDesignId: null,
   },
 ];
 

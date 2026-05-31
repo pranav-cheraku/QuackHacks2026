@@ -1,4 +1,12 @@
-import { createFileRoute, Link } from "@tanstack/react-router";
+import { createFileRoute, Link, useNavigate } from "@tanstack/react-router";
+import { useState } from "react";
+import {
+  signInWithEmailAndPassword,
+  signInWithPopup,
+  GoogleAuthProvider,
+} from "firebase/auth";
+import { auth } from "@/lib/firebase";
+import { useAuth } from "@/context/AuthContext";
 
 export const Route = createFileRoute("/signin")({
   head: () => ({
@@ -8,6 +16,46 @@ export const Route = createFileRoute("/signin")({
 });
 
 function SignIn() {
+  const { currentUser, loading } = useAuth();
+  const navigate = useNavigate();
+  const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
+  const [error, setError] = useState<string | null>(null);
+  const [submitting, setSubmitting] = useState(false);
+
+  // Redirect if already signed in
+  if (!loading && currentUser) {
+    navigate({ to: "/" });
+    return null;
+  }
+
+  async function handleEmailSignIn() {
+    if (!email || !password) return;
+    setError(null);
+    setSubmitting(true);
+    try {
+      await signInWithEmailAndPassword(auth, email, password);
+      navigate({ to: "/" });
+    } catch (err: unknown) {
+      setError(friendlyError(err));
+    } finally {
+      setSubmitting(false);
+    }
+  }
+
+  async function handleGoogleSignIn() {
+    setError(null);
+    setSubmitting(true);
+    try {
+      await signInWithPopup(auth, new GoogleAuthProvider());
+      navigate({ to: "/" });
+    } catch (err: unknown) {
+      setError(friendlyError(err));
+    } finally {
+      setSubmitting(false);
+    }
+  }
+
   return (
     <div className="min-h-screen flex items-center justify-center bg-background px-4">
       <div className="w-full max-w-sm">
@@ -22,7 +70,9 @@ function SignIn() {
           {/* Google */}
           <button
             type="button"
-            className="w-full flex items-center justify-center gap-2.5 rounded-lg border border-border bg-background px-4 py-2.5 text-sm font-medium text-ink transition-colors hover:bg-accent/10"
+            onClick={handleGoogleSignIn}
+            disabled={submitting}
+            className="w-full flex items-center justify-center gap-2.5 rounded-lg border border-border bg-background px-4 py-2.5 text-sm font-medium text-ink transition-colors hover:bg-accent/10 disabled:opacity-50"
           >
             <svg width="18" height="18" viewBox="0 0 18 18" fill="none">
               <path d="M17.64 9.2c0-.637-.057-1.251-.164-1.84H9v3.481h4.844c-.209 1.125-.843 2.078-1.796 2.717v2.258h2.908c1.702-1.567 2.684-3.875 2.684-6.615Z" fill="#4285F4"/>
@@ -52,6 +102,8 @@ function SignIn() {
                 id="email"
                 type="email"
                 placeholder="you@example.com"
+                value={email}
+                onChange={(e) => setEmail(e.target.value)}
                 className="w-full rounded-lg border border-border bg-background px-3 py-2.5 text-sm text-ink placeholder:text-muted-foreground outline-none focus:ring-2 focus:ring-accent/40 transition"
               />
             </div>
@@ -63,16 +115,25 @@ function SignIn() {
                 id="password"
                 type="password"
                 placeholder="••••••••"
+                value={password}
+                onChange={(e) => setPassword(e.target.value)}
+                onKeyDown={(e) => e.key === "Enter" && handleEmailSignIn()}
                 className="w-full rounded-lg border border-border bg-background px-3 py-2.5 text-sm text-ink placeholder:text-muted-foreground outline-none focus:ring-2 focus:ring-accent/40 transition"
               />
             </div>
           </div>
 
+          {error && (
+            <p className="text-xs text-red-500">{error}</p>
+          )}
+
           <button
             type="button"
-            className="w-full rounded-lg bg-primary px-4 py-2.5 text-sm font-semibold text-primary-foreground transition-colors hover:bg-primary/90"
+            onClick={handleEmailSignIn}
+            disabled={submitting || !email || !password}
+            className="w-full rounded-lg bg-primary px-4 py-2.5 text-sm font-semibold text-primary-foreground transition-colors hover:bg-primary/90 disabled:opacity-50"
           >
-            Sign in
+            {submitting ? "Signing in…" : "Sign in"}
           </button>
         </div>
 
@@ -85,4 +146,20 @@ function SignIn() {
       </div>
     </div>
   );
+}
+
+function friendlyError(err: unknown): string {
+  if (typeof err === "object" && err !== null && "code" in err) {
+    const code = (err as { code: string }).code;
+    if (code === "auth/invalid-credential" || code === "auth/wrong-password" || code === "auth/user-not-found") {
+      return "Incorrect email or password.";
+    }
+    if (code === "auth/too-many-requests") {
+      return "Too many attempts. Try again later.";
+    }
+    if (code === "auth/popup-closed-by-user") {
+      return "Sign-in popup was closed.";
+    }
+  }
+  return "Something went wrong. Please try again.";
 }

@@ -1,4 +1,12 @@
-import { createFileRoute, Link } from "@tanstack/react-router";
+import { createFileRoute, Link, useNavigate } from "@tanstack/react-router";
+import { useState } from "react";
+import {
+  createUserWithEmailAndPassword,
+  signInWithPopup,
+  GoogleAuthProvider,
+} from "firebase/auth";
+import { auth } from "@/lib/firebase";
+import { useAuth } from "@/context/AuthContext";
 
 export const Route = createFileRoute("/signup")({
   head: () => ({
@@ -8,6 +16,51 @@ export const Route = createFileRoute("/signup")({
 });
 
 function SignUp() {
+  const { currentUser, loading } = useAuth();
+  const navigate = useNavigate();
+  const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
+  const [confirm, setConfirm] = useState("");
+  const [error, setError] = useState<string | null>(null);
+  const [submitting, setSubmitting] = useState(false);
+
+  // Redirect if already signed in
+  if (!loading && currentUser) {
+    navigate({ to: "/" });
+    return null;
+  }
+
+  async function handleEmailSignUp() {
+    if (!email || !password || !confirm) return;
+    if (password !== confirm) {
+      setError("Passwords do not match.");
+      return;
+    }
+    setError(null);
+    setSubmitting(true);
+    try {
+      await createUserWithEmailAndPassword(auth, email, password);
+      navigate({ to: "/" });
+    } catch (err: unknown) {
+      setError(friendlyError(err));
+    } finally {
+      setSubmitting(false);
+    }
+  }
+
+  async function handleGoogleSignUp() {
+    setError(null);
+    setSubmitting(true);
+    try {
+      await signInWithPopup(auth, new GoogleAuthProvider());
+      navigate({ to: "/" });
+    } catch (err: unknown) {
+      setError(friendlyError(err));
+    } finally {
+      setSubmitting(false);
+    }
+  }
+
   return (
     <div className="min-h-screen flex items-center justify-center bg-background px-4">
       <div className="w-full max-w-sm">
@@ -22,7 +75,9 @@ function SignUp() {
           {/* Google */}
           <button
             type="button"
-            className="w-full flex items-center justify-center gap-2.5 rounded-lg border border-border bg-background px-4 py-2.5 text-sm font-medium text-ink transition-colors hover:bg-accent/10"
+            onClick={handleGoogleSignUp}
+            disabled={submitting}
+            className="w-full flex items-center justify-center gap-2.5 rounded-lg border border-border bg-background px-4 py-2.5 text-sm font-medium text-ink transition-colors hover:bg-accent/10 disabled:opacity-50"
           >
             <svg width="18" height="18" viewBox="0 0 18 18" fill="none">
               <path d="M17.64 9.2c0-.637-.057-1.251-.164-1.84H9v3.481h4.844c-.209 1.125-.843 2.078-1.796 2.717v2.258h2.908c1.702-1.567 2.684-3.875 2.684-6.615Z" fill="#4285F4"/>
@@ -52,6 +107,8 @@ function SignUp() {
                 id="email"
                 type="email"
                 placeholder="you@example.com"
+                value={email}
+                onChange={(e) => setEmail(e.target.value)}
                 className="w-full rounded-lg border border-border bg-background px-3 py-2.5 text-sm text-ink placeholder:text-muted-foreground outline-none focus:ring-2 focus:ring-accent/40 transition"
               />
             </div>
@@ -63,6 +120,8 @@ function SignUp() {
                 id="password"
                 type="password"
                 placeholder="••••••••"
+                value={password}
+                onChange={(e) => setPassword(e.target.value)}
                 className="w-full rounded-lg border border-border bg-background px-3 py-2.5 text-sm text-ink placeholder:text-muted-foreground outline-none focus:ring-2 focus:ring-accent/40 transition"
               />
             </div>
@@ -74,16 +133,25 @@ function SignUp() {
                 id="confirm-password"
                 type="password"
                 placeholder="••••••••"
+                value={confirm}
+                onChange={(e) => setConfirm(e.target.value)}
+                onKeyDown={(e) => e.key === "Enter" && handleEmailSignUp()}
                 className="w-full rounded-lg border border-border bg-background px-3 py-2.5 text-sm text-ink placeholder:text-muted-foreground outline-none focus:ring-2 focus:ring-accent/40 transition"
               />
             </div>
           </div>
 
+          {error && (
+            <p className="text-xs text-red-500">{error}</p>
+          )}
+
           <button
             type="button"
-            className="w-full rounded-lg bg-primary px-4 py-2.5 text-sm font-semibold text-primary-foreground transition-colors hover:bg-primary/90"
+            onClick={handleEmailSignUp}
+            disabled={submitting || !email || !password || !confirm}
+            className="w-full rounded-lg bg-primary px-4 py-2.5 text-sm font-semibold text-primary-foreground transition-colors hover:bg-primary/90 disabled:opacity-50"
           >
-            Create account
+            {submitting ? "Creating account…" : "Create account"}
           </button>
         </div>
 
@@ -96,4 +164,23 @@ function SignUp() {
       </div>
     </div>
   );
+}
+
+function friendlyError(err: unknown): string {
+  if (typeof err === "object" && err !== null && "code" in err) {
+    const code = (err as { code: string }).code;
+    if (code === "auth/email-already-in-use") {
+      return "An account with this email already exists.";
+    }
+    if (code === "auth/weak-password") {
+      return "Password must be at least 6 characters.";
+    }
+    if (code === "auth/invalid-email") {
+      return "Please enter a valid email address.";
+    }
+    if (code === "auth/popup-closed-by-user") {
+      return "Sign-up popup was closed.";
+    }
+  }
+  return "Something went wrong. Please try again.";
 }

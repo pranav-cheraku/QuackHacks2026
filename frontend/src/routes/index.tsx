@@ -1,13 +1,11 @@
-import { createFileRoute, redirect } from "@tanstack/react-router";
+import { createFileRoute, useNavigate } from "@tanstack/react-router";
 import { useState } from "react";
 import { TopBar } from "@/components/projektor/TopBar";
 import { BoardView } from "@/components/projektor/BoardView";
 import { EditorView } from "@/components/projektor/EditorView";
+import { useAuth } from "@/context/AuthContext";
 
 export const Route = createFileRoute("/")({
-  beforeLoad: () => {
-    throw redirect({ to: "/signin" });
-  },
   head: () => ({
     meta: [
       { title: "Projektor — Board + Editor" },
@@ -22,7 +20,15 @@ export const Route = createFileRoute("/")({
 });
 
 function Projektor() {
+  const { currentUser, loading } = useAuth();
+  const navigate = useNavigate();
   const [mode, setMode] = useState<"board" | "editor">("board");
+
+  if (loading) return null;
+  if (!currentUser) {
+    navigate({ to: "/signin" });
+    return null;
+  }
   const [zoom, setZoom] = useState(1);
   const [isGridVisible, setIsGridVisible] = useState(false);
   const [editorStart, setEditorStart] = useState<string | null>(null);

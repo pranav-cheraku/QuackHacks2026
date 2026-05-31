@@ -17,6 +17,8 @@ import { chunkDeck } from "./chunkApi";
 export interface HydrateResult {
   nodes: SlideNode[];
   edges: Edge[];
+  // "gemini" = real LLM ran; "mock" = Gemini unavailable, used paragraph-split fallback.
+  source: "gemini" | "mock";
 }
 
 export type TargetDuration = 5 | 10 | 20;
@@ -103,7 +105,7 @@ function mockChunkIntoScenes(text: string, targetCount: number): ChunkResult[] {
 // slide design yet. elements[] stays empty — it is populated lazily when the
 // user double-clicks a bucket and the slide-design agent runs (see slideDesignAgent.ts).
 // Board position: 4-column grid, left-to-right then top-to-bottom.
-function buildSlideNodes(chunks: ChunkResult[]): HydrateResult {
+function buildSlideNodes(chunks: ChunkResult[]): Pick<HydrateResult, "nodes" | "edges"> {
   const COLS_PER_ROW = 4;
   const COL_W = 360;
   const ROW_H = 240;
@@ -152,12 +154,16 @@ export async function hydrateToSlides(
   const targetCount = durationToSlideCount(duration);
 
   let chunks: ChunkResult[];
+  let source: HydrateResult["source"];
   try {
     chunks = await chunkIntoScenes(text, targetCount);
+    source = "gemini";
   } catch (err) {
-    console.warn("[chunker] Gemini API unavailable, using mock fallback:", err);
+    const errMsg = err instanceof Error ? err.message : String(err);
+    console.warn("[chunker] Gemini unavailable — mock fallback active.\n  Reason:", errMsg);
     chunks = mockChunkIntoScenes(text, targetCount);
+    source = "mock";
   }
 
-  return buildSlideNodes(chunks);
+  return { ...buildSlideNodes(chunks), source };
 }

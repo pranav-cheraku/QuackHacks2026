@@ -2,11 +2,32 @@ import { GoogleGenerativeAI, SchemaType } from "@google/generative-ai";
 import type { Schema } from "@google/generative-ai";
 
 let _client: GoogleGenerativeAI | null = null;
+let _keyChecked = false;
+
+// Call once on server startup (or on first request) to confirm key presence.
+// Logs status without printing the key value.
+export function verifyGeminiKey(): void {
+  if (_keyChecked) return;
+  _keyChecked = true;
+  const key = process.env.GEMINI_API_KEY;
+  if (!key) {
+    console.error(
+      "[projektor] ❌ GEMINI_API_KEY is not set.\n" +
+      "  Add it to frontend/.env: GEMINI_API_KEY=your_key_here\n" +
+      "  The chunking agent will fall back to mock output until the key is present.",
+    );
+  } else {
+    console.log(
+      `[projektor] ✓ Gemini key loaded (${key.length} chars, starts with ${key.slice(0, 4)}…)`,
+    );
+  }
+}
 
 function getClient(): GoogleGenerativeAI {
   if (_client) return _client;
+  verifyGeminiKey();
   const apiKey = process.env.GEMINI_API_KEY;
-  if (!apiKey) throw new Error("GEMINI_API_KEY environment variable is not set");
+  if (!apiKey) throw new Error("[GEMINI_KEY_MISSING] GEMINI_API_KEY is not set — add it to frontend/.env");
   _client = new GoogleGenerativeAI(apiKey);
   return _client;
 }

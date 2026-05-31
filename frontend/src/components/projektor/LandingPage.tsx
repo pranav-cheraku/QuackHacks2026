@@ -26,6 +26,7 @@ export function LandingPage({ onGenerate, onSkip }: Props) {
   const [duration, setDuration] = useState<TargetDuration>(10);
   const [isGenerating, setIsGenerating] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [usedMock, setUsedMock] = useState(false);
 
   const handleGenerate = async () => {
     if (!text.trim()) {
@@ -33,14 +34,23 @@ export function LandingPage({ onGenerate, onSkip }: Props) {
       return;
     }
     setError(null);
+    setUsedMock(false);
     setIsGenerating(true);
     try {
       const result = await hydrateToSlides(text.trim(), duration);
+      if (result.source === "mock") setUsedMock(true);
       onGenerate(result);
     } catch (err) {
-      setError(
-        err instanceof Error ? err.message : "Something went wrong. Try again.",
-      );
+      // Map staged error labels to readable UI messages
+      const msg = err instanceof Error ? err.message : "Something went wrong. Try again.";
+      if (msg.includes("[GEMINI_KEY_MISSING]"))
+        setError("Gemini key not found — add GEMINI_API_KEY to frontend/.env and restart.");
+      else if (msg.includes("[GEMINI_API_ERROR]"))
+        setError("Gemini API error — check your key, quota, and network, then try again.");
+      else if (msg.includes("[GEMINI_PARSE_ERROR]") || msg.includes("[GEMINI_SCHEMA_ERROR]"))
+        setError("Gemini returned unexpected output. Try again or shorten your text.");
+      else
+        setError(msg);
     } finally {
       setIsGenerating(false);
     }
@@ -210,6 +220,13 @@ export function LandingPage({ onGenerate, onSkip }: Props) {
           {error && (
             <div className="mt-3 px-4 py-2.5 rounded-xl bg-red-50 border border-red-200 text-[12px] text-red-600">
               {error}
+            </div>
+          )}
+
+          {/* Mock-mode notice — shown after generate when Gemini was unreachable */}
+          {usedMock && !error && (
+            <div className="mt-3 px-4 py-2.5 rounded-xl bg-amber-50 border border-amber-200 text-[12px] text-amber-700">
+              ⚠ Gemini was unreachable — deck built with mock generation. Check your key and restart the dev server.
             </div>
           )}
 

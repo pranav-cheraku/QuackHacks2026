@@ -37,6 +37,7 @@ type Tab = "chat" | "inspect" | "argument";
 
 interface Props {
   node: SlideNode | null;
+  selectedCount: number;
   parentRelation: EdgeRelation | null; // null → this is a root (no parent)
   hasParent: boolean;
   onClose: () => void;
@@ -98,6 +99,7 @@ const BLOCK_ICON: Partial<Record<ComponentType, typeof Heading>> = {
 // the canvas viewport as an absolute sibling, so it doesn't pan with the canvas.
 export function ScenePanel({
   node,
+  selectedCount,
   parentRelation,
   hasParent,
   onClose,
@@ -119,7 +121,7 @@ export function ScenePanel({
       <div className="px-4 pt-3.5 pb-3 border-b border-border shrink-0">
         <div className="flex items-center gap-2">
           <span className="font-mono text-[10px] uppercase tracking-wider text-muted-foreground">
-            {node ? `Scene ${String(node.index).padStart(2, "0")}` : "Scene"}
+            {node ? `Scene ${String(node.index).padStart(2, "0")}` : "Graph View"}
           </span>
           <button
             type="button"
@@ -131,7 +133,7 @@ export function ScenePanel({
           </button>
         </div>
         <div className="mt-1 font-serif text-[20px] leading-[1.15] text-ink truncate">
-          {node ? node.title : "No scene selected"}
+          {node ? node.title : "Your presentation"}
         </div>
 
         {/* Tabs */}
@@ -160,12 +162,12 @@ export function ScenePanel({
       </div>
 
       {/* Body */}
-      {!node ? (
+      {tab === "chat" ? (
+        <ChatTab title={node?.title ?? "your presentation"} selectedCount={selectedCount} />
+      ) : !node ? (
         <div className="flex-1 flex items-center justify-center px-6 text-center text-[13px] text-muted-foreground">
           Select a scene to inspect it.
         </div>
-      ) : tab === "chat" ? (
-        <ChatTab title={node.title} />
       ) : tab === "inspect" ? (
         <InspectTab
           node={node}
@@ -452,7 +454,7 @@ interface AttachedImage {
   objectUrl: string;
 }
 
-function ChatTab({ title }: { title: string }) {
+function ChatTab({ title, selectedCount }: { title: string; selectedCount: number }) {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [draft, setDraft] = useState("");
   const [attachment, setAttachment] = useState<AttachedImage | null>(null);
@@ -554,6 +556,14 @@ function ChatTab({ title }: { title: string }) {
         )}
       </div>
 
+      {/* Slides context badge */}
+      <div className="px-3 pb-1 shrink-0 flex">
+        <div className="flex items-center gap-1 px-1.5 py-0.5 rounded bg-canvas border border-border text-[10px] text-muted-foreground select-none">
+          <ImageIcon size={10} />
+          {selectedCount} slide{selectedCount !== 1 ? "s" : ""} selected
+        </div>
+      </div>
+
       {/* Input */}
       <div className="border-t border-border p-2.5 shrink-0 space-y-2">
         {/* Image attachment preview */}
@@ -581,6 +591,7 @@ function ChatTab({ title }: { title: string }) {
 
         <div className="border border-border rounded-lg px-2 py-2 bg-card flex items-center gap-1.5">
           {/* + button — opens image upload dropup */}
+
           <DropdownMenu>
             <DropdownMenuTrigger asChild>
               <button
@@ -612,12 +623,6 @@ function ChatTab({ title }: { title: string }) {
             className="hidden"
             onChange={handleFileChange}
           />
-
-          {/* Slides context badge */}
-          <div className="flex items-center gap-1 px-1.5 py-0.5 rounded bg-canvas border border-border text-[10px] text-muted-foreground shrink-0 select-none">
-            <ImageIcon size={10} />
-            1 slide selected
-          </div>
 
           <input
             className="flex-1 text-[13px] bg-transparent outline-none placeholder:text-muted-foreground min-w-0"

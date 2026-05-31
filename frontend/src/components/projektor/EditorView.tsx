@@ -391,7 +391,6 @@ export function EditorView({
       title: "New Slide",
       x: 0, y: 0, rotation: 0,
       state: "rendered" as const,
-      components: [],
       thumb: "title" as const,
       root: emptyRoot(id),
       candidates: [],

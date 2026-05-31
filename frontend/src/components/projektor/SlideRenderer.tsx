@@ -172,14 +172,14 @@ function Block({ block }: { block: ContentBlock }) {
   }
 
   if (block.role === 'data') {
-    const rawValues = block.chart.data['values'];
+    const rawValues = block.chart?.data?.['values'];
     const values: number[] = Array.isArray(rawValues)
       ? rawValues.filter((v): v is number => typeof v === 'number')
       : [];
     const max = values.length > 0 ? Math.max(...values) : 1;
     return (
       <div style={{ ...base, gap: '0.6cqw' }}>
-        {block.chart.title && (
+        {block.chart?.title && (
           <p style={{
             margin: 0,
             fontSize: '1.2cqw',
@@ -214,7 +214,7 @@ function Block({ block }: { block: ContentBlock }) {
   return (
     <div style={{ ...base, justifyContent: 'center' }}>
       <p style={{ margin: 0, fontSize: '1.2cqw', color: '#9ca3af', fontFamily: 'var(--font-mono, monospace)' }}>
-        {block.diagram.kind}
+        {block.diagram?.kind ?? ''}
       </p>
     </div>
   );

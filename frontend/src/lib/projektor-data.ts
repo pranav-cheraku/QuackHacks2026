@@ -1,63 +1,12 @@
 import type { LayoutNode } from "./ir";
 import { emptyRoot } from "./ir";
 
-export type ComponentType =
-  | "Header"
-  | "Subheader"
-  | "Body"
-  | "Stat"
-  | "Quote"
-  | "List"
-  | "Image"
-  | "Chart"
-  | "Video"
-  | "Divider"
-  | "Byline";
-
-export const CONTENT_COMPONENTS: ComponentType[] = [
-  "Header",
-  "Subheader",
-  "Body",
-  "Stat",
-  "Quote",
-  "List",
-];
-export const MEDIA_COMPONENTS: ComponentType[] = [
-  "Image",
-  "Chart",
-  "Video",
-  "Divider",
-  "Byline",
-];
-
 // ── Graph-view scene metadata types ──────────────────────────────────────────
 export type SceneKind = "title" | "problem" | "data";
 export type SceneStatus = "final" | "draft" | "in-review";
 export type SceneRole = "claim" | "evidence" | "data" | "title";
 export type EdgeRelation = "supports" | "contrasts" | "builds-on" | "sequence";
 
-export interface ChartRow {
-  label: string;
-  value: number;
-}
-
-// A content block on a scene (the slide's "ingredients"). Listed in Inspect's
-// "Content blocks"; step 10 will also tether these to the canvas as sub-nodes.
-// `label` is the summary shown in lists; the remaining (optional) fields hold
-// the actual content the user entered in the Add-content popup, by type:
-//   text types → text   ·   Image → src   ·   Video → url   ·   Chart → data
-export interface ContentBlock {
-  id: string;
-  type: ComponentType;
-  label: string;
-  text?: string;
-  src?: string;
-  url?: string;
-  data?: ChartRow[];
-  // Free position on the content-graph canvas (top-left). Unset → auto-row.
-  cx?: number;
-  cy?: number;
-}
 
 export type SlideState = "rendered" | "ingredient";
 
@@ -80,7 +29,6 @@ export interface SlideNode {
   y: number;
   // Editor-required fields (optional so graph-view ghost nodes can omit them)
   rotation?: number;
-  components?: ComponentType[];
   root?: LayoutNode;
   candidates?: SlideCandidate[];
   activeDesignId?: string | null;
@@ -96,7 +44,6 @@ export interface SlideNode {
   // Graph-view Inspect panel fields (all optional).
   role?: SceneRole;
   locked?: boolean;
-  blocks?: ContentBlock[];
   // Ghost (AI-suggested branch) fields.
   ghost?: boolean;
   discarded?: boolean;
@@ -135,8 +82,7 @@ export const INITIAL_NODES: SlideNode[] = [
     y: 80,
     rotation: -1.2,
     state: "rendered",
-    components: [],
-    thumb: "title",
+      thumb: "title",
     width: 280,
     height: 170,
     root: emptyRoot("n1"),
@@ -153,8 +99,7 @@ export const INITIAL_NODES: SlideNode[] = [
     y: 150,
     rotation: 0.8,
     state: "rendered",
-    components: [],
-    thumb: "stats",
+      thumb: "stats",
     width: 280,
     height: 170,
     root: emptyRoot("n2"),
@@ -171,8 +116,7 @@ export const INITIAL_NODES: SlideNode[] = [
     y: 90,
     rotation: -0.6,
     state: "ingredient",
-    components: ["Header", "Image", "Body"],
-    thumb: "title",
+      thumb: "title",
     width: 260,
     height: 220,
     root: emptyRoot("n3"),
@@ -189,8 +133,7 @@ export const INITIAL_NODES: SlideNode[] = [
     y: 200,
     rotation: 1.4,
     state: "rendered",
-    components: [],
-    thumb: "chart",
+      thumb: "chart",
     width: 280,
     height: 170,
     root: emptyRoot("n4"),
@@ -207,8 +150,7 @@ export const INITIAL_NODES: SlideNode[] = [
     y: 110,
     rotation: -0.4,
     state: "rendered",
-    components: [],
-    thumb: "list",
+      thumb: "list",
     width: 280,
     height: 170,
     root: emptyRoot("n5"),
@@ -225,8 +167,7 @@ export const INITIAL_NODES: SlideNode[] = [
     y: 200,
     rotation: 0.6,
     state: "rendered",
-    components: [],
-    thumb: "closing",
+      thumb: "closing",
     width: 280,
     height: 170,
     root: emptyRoot("n6"),

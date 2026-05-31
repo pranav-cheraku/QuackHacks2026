@@ -4,6 +4,8 @@ import {
   Link,
   createRootRouteWithContext,
   useRouter,
+  useNavigate,
+  useRouterState,
   HeadContent,
   Scripts,
 } from "@tanstack/react-router";
@@ -11,7 +13,34 @@ import { useEffect, type ReactNode } from "react";
 
 import appCss from "../styles.css?url";
 import { reportLovableError } from "../lib/lovable-error-reporting";
-import { AuthProvider } from "../context/AuthContext";
+import { AuthProvider, useAuth } from "../context/AuthContext";
+
+const AUTH_ROUTES = new Set(["/signin", "/signup"]);
+
+function AuthGate({ children }: { children: ReactNode }) {
+  const { currentUser, loading } = useAuth();
+  const navigate = useNavigate();
+  const { location } = useRouterState();
+  const isAuthRoute = AUTH_ROUTES.has(location.pathname);
+
+  useEffect(() => {
+    if (!loading && !currentUser && !isAuthRoute) {
+      navigate({ to: "/signin" });
+    }
+  }, [loading, currentUser, isAuthRoute, navigate]);
+
+  if (loading) {
+    return (
+      <div className="min-h-screen flex items-center justify-center bg-background">
+        <div className="w-5 h-5 rounded-full border-2 border-t-transparent animate-spin" style={{ borderColor: "var(--accent)", borderTopColor: "transparent" }} />
+      </div>
+    );
+  }
+
+  if (!currentUser && !isAuthRoute) return null;
+
+  return <>{children}</>;
+}
 
 function NotFoundComponent() {
   return (
@@ -131,8 +160,9 @@ function RootComponent() {
   return (
     <QueryClientProvider client={queryClient}>
       <AuthProvider>
-        {/* Required: nested routes render here. Removing <Outlet /> breaks all child routes. */}
-        <Outlet />
+        <AuthGate>
+          <Outlet />
+        </AuthGate>
       </AuthProvider>
     </QueryClientProvider>
   );

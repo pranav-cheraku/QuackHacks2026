@@ -2,10 +2,31 @@
 // User pastes notes (or attaches docs), clicks Generate, and lands in the graph view.
 
 import { useState, useRef } from "react";
-import { Link } from "@tanstack/react-router";
+import { Link, useNavigate } from "@tanstack/react-router";
 import { Logo } from "./Logo";
 import { hydrateToSlides, type HydrateResult } from "@/lib/chunker";
-import { Paperclip, ArrowRight, Loader2, X, FileText } from "lucide-react";
+import { Paperclip, ArrowRight, Loader2, X, FileText, LogOut } from "lucide-react";
+import { signOut } from "firebase/auth";
+import { auth } from "@/lib/firebase";
+import { useAuth } from "@/context/AuthContext";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuLabel,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
+
+function getInitials(user: { displayName: string | null; email: string | null }): string {
+  if (user.displayName) {
+    const parts = user.displayName.trim().split(/\s+/);
+    return parts.length >= 2
+      ? (parts[0][0] + parts[parts.length - 1][0]).toUpperCase()
+      : parts[0][0].toUpperCase();
+  }
+  return user.email ? user.email[0].toUpperCase() : "?";
+}
 
 interface Props {
   onGenerate: (result: HydrateResult) => void;
@@ -54,6 +75,8 @@ async function extractFileText(file: File): Promise<string> {
 }
 
 export function LandingPage({ onGenerate }: Props) {
+  const { currentUser } = useAuth();
+  const navigate = useNavigate();
   const [text, setText] = useState("");
   const [isGenerating, setIsGenerating] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -61,6 +84,11 @@ export function LandingPage({ onGenerate }: Props) {
   const [mockErrorReason, setMockErrorReason] = useState<string | null>(null);
   const [attachedFiles, setAttachedFiles] = useState<File[]>([]);
   const fileInputRef = useRef<HTMLInputElement>(null);
+
+  async function handleSignOut() {
+    await signOut(auth);
+    navigate({ to: "/signin" });
+  }
 
   const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const files = e.target.files;
@@ -127,12 +155,59 @@ export function LandingPage({ onGenerate }: Props) {
           <Logo />
           <span className="font-semibold text-[15px] text-ink">Projektor</span>
         </div>
-        <Link
-          to="/dashboard"
-          className="text-[13px] text-muted-foreground hover:text-ink transition-colors px-3 py-1.5 rounded-lg hover:bg-canvas/60"
-        >
-          Dashboard
-        </Link>
+        <div className="flex items-center gap-3">
+          <Link
+            to="/dashboard"
+            className="text-[13px] text-muted-foreground hover:text-ink transition-colors px-3 py-1.5 rounded-lg hover:bg-canvas/60"
+          >
+            Dashboard
+          </Link>
+          {currentUser && (
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <button className="rounded-full w-8 h-8 overflow-hidden shrink-0 ring-2 ring-transparent hover:ring-accent/40 transition-shadow focus:outline-none">
+                  {currentUser.photoURL ? (
+                    <img
+                      src={currentUser.photoURL}
+                      alt="Profile"
+                      className="w-full h-full object-cover"
+                      referrerPolicy="no-referrer"
+                    />
+                  ) : (
+                    <span
+                      className="w-full h-full flex items-center justify-center text-[12px] font-semibold"
+                      style={{ background: "var(--accent-soft)", color: "var(--accent)" }}
+                    >
+                      {getInitials(currentUser)}
+                    </span>
+                  )}
+                </button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="end" className="w-52">
+                <DropdownMenuLabel className="font-normal">
+                  <div className="flex flex-col gap-0.5">
+                    {currentUser.displayName && (
+                      <span className="font-semibold text-ink text-[13px] truncate">
+                        {currentUser.displayName}
+                      </span>
+                    )}
+                    <span className="text-[12px] text-muted-foreground truncate">
+                      {currentUser.email}
+                    </span>
+                  </div>
+                </DropdownMenuLabel>
+                <DropdownMenuSeparator />
+                <DropdownMenuItem
+                  onClick={handleSignOut}
+                  className="text-danger focus:text-danger focus:bg-danger/10 cursor-pointer"
+                >
+                  <LogOut size={14} />
+                  Sign out
+                </DropdownMenuItem>
+              </DropdownMenuContent>
+            </DropdownMenu>
+          )}
+        </div>
       </header>
 
       {/* Main */}

@@ -55,12 +55,6 @@ function Projektor() {
   const [currentProjectId, setCurrentProjectId] = useState<string | null>(projectId ?? null);
   const saveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  useEffect(() => {
-    if (!loading && !currentUser) {
-      navigate({ to: "/signin" });
-    }
-  }, [loading, currentUser, navigate]);
-
   // Load the project from Firestore when a projectId is present in the URL.
   // Runs whenever projectId changes so navigating between projects works correctly.
   useEffect(() => {
@@ -117,6 +111,8 @@ function Projektor() {
     return () => window.removeEventListener("keydown", handleKeyDown);
   }, []);
 
+  // Prevent BoardView from mounting until auth is confirmed — avoids ref-loop
+  // timing issues when Radix components initialize during the auth transition.
   if (loading || !currentUser) return null;
 
   const setZoom = (nextZoom: number) => setZoomState(clampZoom(nextZoom));
@@ -127,7 +123,7 @@ function Projektor() {
   const handleGenerate = async ({ nodes, edges, contentPool: pool }: HydrateResult) => {
     createDeck(nodes, edges); // keep session store in sync for any session-only consumers
     const name = nodes[0]?.title ?? "Untitled";
-    const newProjectId = await createProject(currentUser.uid, name, nodes, edges, pool);
+    const newProjectId = await createProject(currentUser!.uid, name, nodes, edges, pool);
     setCurrentProjectId(newProjectId);
     setDeck(nodes);
     setDeckEdges(edges);

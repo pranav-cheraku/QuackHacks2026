@@ -263,12 +263,19 @@ export function BoardView({ zoom, setZoom, onOpenEditor }: Props) {
       const move = (ev: MouseEvent) => {
         if (!selBoxOriginRef.current) return;
         const cur = toCanvas(ev.clientX, ev.clientY);
-        setSelectionBox({
-          x1: selBoxOriginRef.current.cx,
-          y1: selBoxOriginRef.current.cy,
-          x2: cur.x,
-          y2: cur.y,
-        });
+        const bx1 = Math.min(selBoxOriginRef.current.cx, cur.x);
+        const by1 = Math.min(selBoxOriginRef.current.cy, cur.y);
+        const bx2 = Math.max(selBoxOriginRef.current.cx, cur.x);
+        const by2 = Math.max(selBoxOriginRef.current.cy, cur.y);
+        setSelectionBox({ x1: selBoxOriginRef.current.cx, y1: selBoxOriginRef.current.cy, x2: cur.x, y2: cur.y });
+        const hits = nodes
+          .filter((n) => {
+            const nw = n.width ?? 320;
+            const nh = n.height ?? 180;
+            return n.x < bx2 && n.x + nw > bx1 && n.y < by2 && n.y + nh > by1;
+          })
+          .map((n) => n.id);
+        setSelectedIds(new Set(hits));
       };
       const up = (ev: MouseEvent) => {
         if (selBoxOriginRef.current) {

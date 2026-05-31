@@ -1,4 +1,5 @@
-import { useRef, useState } from "react";
+import { useRef, useState, useEffect } from "react";
+import { loadSlides } from "@/lib/firestore-slides";
 import { GraphMapPanel } from "./GraphMapPanel";
 import { GraphToolRail } from "./GraphToolRail";
 import { StatusFilterPanel } from "./StatusFilterPanel";
@@ -185,6 +186,24 @@ export function BoardView({ zoom, setZoom, onOpenEditor, initialNodes, initialEd
   const viewportRef = useRef<HTMLDivElement>(null);
   const blockSeq = useRef(0); // monotonic ids for added content blocks
   const genSeq = useRef(0); // monotonic ids for generated candidate nodes
+
+  // Load slides from Firestore on mount so the graph reflects the live database.
+  // Only runs when using the default board (no custom deck passed via props) —
+  // if a custom deck was loaded (e.g. from the chunker), its nodes/edges must
+  // not be overwritten. frameNodes auto-fits the viewport so every node,
+  // including the rightmost leaf and its Generate-next button, is visible.
+  useEffect(() => {
+    if (initialNodes !== INITIAL_NODES) return;
+    loadSlides()
+      .then((remote) => {
+        if (remote && remote.length > 0) {
+          setNodes(remote);
+          setTimeout(() => frameNodes(remote), 0);
+        }
+      })
+      .catch((err) => console.error("[BoardView] Failed to load slides:", err));
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   const findNode = (id: string) => nodes.find((n) => n.id === id)!;
 
@@ -542,8 +561,11 @@ export function BoardView({ zoom, setZoom, onOpenEditor, initialNodes, initialEd
               </marker>
             </defs>
             {edges.map((e, i) => {
-              const a = anchor(findNode(e.from), "bottom");
-              const b = anchor(findNode(e.to), "top");
+              const fromNode = findNode(e.from);
+              const toNode = findNode(e.to);
+              if (!fromNode || !toNode) return null;
+              const a = anchor(fromNode, "bottom");
+              const b = anchor(toNode, "top");
               const dim = isEdgeDimmed(e);
               return (
                 <path

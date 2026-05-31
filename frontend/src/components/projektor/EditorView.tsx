@@ -122,6 +122,10 @@ function makeSceneId(): string {
   return `n-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
 }
 
+const RAIL_MIN = 120;
+const RAIL_MAX = 320;
+const RAIL_DEFAULT = 180;
+
 // ─── EditorView ───────────────────────────────────────────────────────────────
 export function EditorView({
   startNodeId,
@@ -152,6 +156,7 @@ export function EditorView({
   // Both views must read from this single edges state — no parallel copy elsewhere.
   const [edges, setEdges] = useState<Edge[]>(INITIAL_EDGES);
 
+  const [railWidth, setRailWidth] = useState(RAIL_DEFAULT);
   const [activeId, setActiveId] = useState(startNodeId ?? "n1");
   const [selectedElId, setSelectedElId] = useState<string | null>(null);
   const [editingElId, setEditingElId] = useState<string | null>(null);
@@ -303,6 +308,26 @@ export function EditorView({
     setEditingElId(null);
     setRailSelectionActive(true);
   }, []);
+
+  const startRailResize = useCallback((e: React.MouseEvent) => {
+    e.preventDefault();
+    const startX = e.clientX;
+    const startWidth = railWidth;
+    document.body.style.cursor = "col-resize";
+    document.body.style.userSelect = "none";
+
+    const onMove = (ev: MouseEvent) => {
+      setRailWidth(Math.max(RAIL_MIN, Math.min(RAIL_MAX, startWidth + ev.clientX - startX)));
+    };
+    const onUp = () => {
+      document.body.style.cursor = "";
+      document.body.style.userSelect = "";
+      window.removeEventListener("mousemove", onMove);
+      window.removeEventListener("mouseup", onUp);
+    };
+    window.addEventListener("mousemove", onMove);
+    window.addEventListener("mouseup", onUp);
+  }, [railWidth]);
 
   // ── Keyboard shortcuts ────────────────────────────────────────────────────
   useEffect(() => {
@@ -626,7 +651,8 @@ export function EditorView({
       <div className="flex-1 flex min-h-0">
         {/* ── Left slide rail ── */}
         <aside
-          className="w-[180px] shrink-0 border-r border-border bg-chrome flex flex-col"
+          className="shrink-0 border-r border-border bg-chrome flex flex-col"
+          style={{ width: railWidth }}
           onClick={(e) => e.stopPropagation()}
         >
           {/* GRAPH SYNC: slides = nodes; the graph keys on slide.id — IDs must be stable + unique.
@@ -719,6 +745,14 @@ export function EditorView({
             </button>
           </div>
         </aside>
+
+        {/* ── Rail resize handle ── */}
+        <div
+          className="w-1 shrink-0 relative group cursor-col-resize z-10 -mx-px"
+          onMouseDown={startRailResize}
+        >
+          <div className="absolute inset-y-0 left-0 w-1 group-hover:w-1.5 transition-all bg-transparent group-hover:bg-[color:var(--accent-teal)] opacity-0 group-hover:opacity-60" />
+        </div>
 
         {/* ── Canvas ── */}
         <div

@@ -44,6 +44,11 @@ export interface ContentBlock {
 
 export type SlideState = "rendered" | "ingredient";
 
+// "bucket"  = raw content from chunker, no slide design yet — lives in graph only.
+// "designed" = has a realized layout (root tree); viewable/editable in slide editor.
+export type DesignStatus = "bucket" | "designed";
+
+// Slides View (slide editor) — a design alternative for a scene.
 export interface SlideCandidate {
   id: string;
   label: string;
@@ -71,12 +76,16 @@ export interface SlideNode {
   status: SceneStatus;
   eyebrow?: string;
   body?: string;
+  // Graph-view Inspect panel fields (all optional).
   role?: SceneRole;
   locked?: boolean;
   blocks?: ContentBlock[];
+  // Ghost (AI-suggested branch) fields.
   ghost?: boolean;
   discarded?: boolean;
   rationale?: string;
+  // "bucket" = raw content from chunker; "designed" (or undefined) = has a layout.
+  designStatus?: DesignStatus;
 }
 
 export interface Edge {

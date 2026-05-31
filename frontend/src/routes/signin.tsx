@@ -25,7 +25,7 @@ function SignIn() {
 
   useEffect(() => {
     if (!loading && currentUser) {
-      navigate({ to: "/" });
+      navigate({ to: "/", search: { deckId: undefined } });
     }
   }, [loading, currentUser, navigate]);
 
@@ -37,7 +37,7 @@ function SignIn() {
     setSubmitting(true);
     try {
       await signInWithEmailAndPassword(auth, email, password);
-      navigate({ to: "/" });
+      navigate({ to: "/", search: { deckId: undefined } });
     } catch (err: unknown) {
       setError(friendlyError(err));
     } finally {
@@ -50,7 +50,7 @@ function SignIn() {
     setSubmitting(true);
     try {
       await signInWithPopup(auth, new GoogleAuthProvider());
-      navigate({ to: "/" });
+      navigate({ to: "/", search: { deckId: undefined } });
     } catch (err: unknown) {
       setError(friendlyError(err));
     } finally {

@@ -12,11 +12,14 @@ import { INITIAL_NODES, INITIAL_EDGES } from "@/lib/projektor-data";
 import type { SlideNode, Edge } from "@/lib/projektor-data";
 import { SlideThumb } from "./SlideThumb";
 import { GridOverlay } from "./GridOverlay";
-import { makeTextElement, makeShapeElement, makeImageElement, nextId } from "@/lib/slide-model";
-import type { SlideElement, TextStyle } from "@/lib/slide-model";
+import {
+  collectLeaves, applySlideEditOp, emptyRoot, deepCloneWithNewIds,
+  makeTextLeaf, makeShapeLeaf, makeImageLeaf, makeLeafId,
+} from "@/lib/ir";
+import type { LayoutNode, LeafNode, SlideEditOp, TextBlockStyle, ShapeBlockStyle } from "@/lib/ir";
 import { gridToCSS, GRID_COLS, GRID_ROWS, snap, SNAP_STEP } from "@/lib/grid";
 import type { GridPlacement } from "@/lib/grid";
-import { SLIDE_ELEMENTS } from "@/lib/initial-slides";
+import { INITIAL_IR_SLIDES } from "@/lib/initial-slides";
 import { SLIDE_CANDIDATES } from "@/lib/slide-candidates";
 import { ZOOM_STEP, zoomBy } from "@/lib/viewport";
 
@@ -113,8 +116,8 @@ export function EditorView({
       past: [],
       present: INITIAL_NODES.map((n) => ({
         ...n,
-        elements:     SLIDE_ELEMENTS[n.id]    ?? [],
-        candidates:   SLIDE_CANDIDATES[n.id]  ?? [],
+        root:          INITIAL_IR_SLIDES[n.id] ?? emptyRoot(n.id),
+        candidates:    SLIDE_CANDIDATES[n.id]  ?? [],
         activeDesignId: SLIDE_CANDIDATES[n.id]?.[0]?.id ?? null,
       })),
       future: [],
@@ -137,7 +140,11 @@ export function EditorView({
   const lastStartNodeIdRef = useRef<string | null>(startNodeId);
 
   const activeSlide = slides.find((s) => s.id === activeId) ?? slides[0];
-  const selectedEl = activeSlide?.elements.find((e) => e.id === selectedElId) ?? null;
+  const selectedLeaf = collectLeaves(activeSlide?.root ?? emptyRoot("")).find((l) => l.id === selectedElId) ?? null;
+
+  // Type-narrowed helpers for toolbar/ArrangePanel
+  const textBlock  = selectedLeaf?.block.role === "text"  ? selectedLeaf.block : null;
+  const shapeBlock = selectedLeaf?.block.role === "shape" ? selectedLeaf.block : null;
 
   useEffect(() => {
     if (startNodeId === lastStartNodeIdRef.current) return;
@@ -159,52 +166,49 @@ export function EditorView({
   const undo = useCallback(() => dispatch({ type: "undo" }), []);
   const redo = useCallback(() => dispatch({ type: "redo" }), []);
 
-  const updateEl = useCallback(
-    (elId: string, fn: (e: SlideElement) => SlideElement) =>
-      updateSlide(activeId, (s) => ({
-        ...s,
-        elements: s.elements.map((e) => (e.id === elId ? fn(e) : e)),
-      })),
+  const dispatchOp = useCallback(
+    (op: SlideEditOp) =>
+      updateSlide(activeId, (s) => ({ ...s, root: applySlideEditOp(s.root, op) })),
     [activeId, updateSlide]
   );
 
-  const addEl = useCallback((el: SlideElement) => {
-    updateSlide(activeId, (s) => ({ ...s, elements: [...s.elements, el] }));
-    setSelectedElId(el.id);
+  const addLeaf = useCallback((leaf: LeafNode) => {
+    const parentId = activeSlide.root.id;
+    const index = collectLeaves(activeSlide.root).length;
+    dispatchOp({ op: "addLeaf", parent: parentId, leaf, index });
+    setSelectedElId(leaf.id);
     setEditingElId(null);
     setRailSelectionActive(false);
-  }, [activeId, updateSlide]);
+  }, [activeSlide, dispatchOp]);
 
-  const deleteEl = useCallback(
+  const deleteLeaf = useCallback(
     (id: string) => {
-      updateSlide(activeId, (s) => ({
-        ...s,
-        elements: s.elements.filter((e) => e.id !== id),
-      }));
+      dispatchOp({ op: "removeLeaf", nodeId: id });
       setSelectedElId(null);
       setEditingElId(null);
     },
-    [activeId, updateSlide]
+    [dispatchOp]
   );
 
-  const duplicateEl = useCallback(
+  const duplicateLeaf = useCallback(
     (id: string) => {
-      const el = activeSlide.elements.find((e) => e.id === id);
-      if (!el) return;
-      const copy: SlideElement = {
-        ...el,
-        id: nextId(),
+      const leaf = collectLeaves(activeSlide.root).find((l) => l.id === id);
+      if (!leaf) return;
+      const copy: LeafNode = {
+        ...leaf,
+        id: makeLeafId(),
         placement: {
-          ...el.placement,
-          col: Math.min(GRID_COLS - el.placement.colSpan, el.placement.col + SNAP_STEP * 3),
-          row: Math.min(GRID_ROWS - el.placement.rowSpan, el.placement.row + SNAP_STEP * 3),
+          ...leaf.placement,
+          col: Math.min(GRID_COLS - leaf.placement.colSpan, leaf.placement.col + SNAP_STEP * 3),
+          row: Math.min(GRID_ROWS - leaf.placement.rowSpan, leaf.placement.row + SNAP_STEP * 3),
         },
       };
-      updateSlide(activeId, (s) => ({ ...s, elements: [...s.elements, copy] }));
+      const parentId = activeSlide.root.id;
+      dispatchOp({ op: "addLeaf", parent: parentId, leaf: copy, index: collectLeaves(activeSlide.root).length });
       setSelectedElId(copy.id);
       setRailSelectionActive(false);
     },
-    [activeId, activeSlide, updateSlide]
+    [activeSlide, dispatchOp]
   );
 
   const addSlide = useCallback(() => {
@@ -224,7 +228,7 @@ export function EditorView({
           state: "rendered" as const,
           components: [],
           thumb: "title" as const,
-          elements: [],
+          root: emptyRoot(id),
           candidates: [],
           activeDesignId: null,
         },
@@ -279,17 +283,17 @@ export function EditorView({
       if (!selectedElId) return;
       if (e.key === "Delete" || e.key === "Backspace") {
         e.preventDefault();
-        deleteEl(selectedElId);
+        deleteLeaf(selectedElId);
       }
       if ((e.metaKey || e.ctrlKey) && e.key === "d") {
         e.preventDefault();
-        duplicateEl(selectedElId);
+        duplicateLeaf(selectedElId);
       }
       if (e.key === "Escape") { setEditingElId(null); setSelectedElId(null); }
     };
     window.addEventListener("keydown", handler);
     return () => window.removeEventListener("keydown", handler);
-  }, [activeId, selectedElId, editingElId, railSelectionActive, deleteSlide, deleteEl, duplicateEl, undo, redo]);
+  }, [activeId, selectedElId, editingElId, railSelectionActive, deleteSlide, deleteLeaf, duplicateLeaf, undo, redo]);
 
   // ── Paste image from clipboard ────────────────────────────────────────────
   useEffect(() => {
@@ -309,46 +313,40 @@ export function EditorView({
       if (!file) return;
       e.preventDefault();
       const src = URL.createObjectURL(file);
-      if (selectedEl?.type === "image") {
-        updateEl(selectedEl.id, (el) => ({ ...el, src }));
+      if (selectedLeaf?.block.role === "image") {
+        dispatchOp({ op: "setImageSrc", nodeId: selectedLeaf.id, src });
       } else {
-        addEl(makeImageElement({ src, placement: { col: 3000, row: 1688, colSpan: 4000, rowSpan: 2250 } }));
+        addLeaf(makeImageLeaf({ block: { role: "image", src }, placement: { col: 3000, row: 1688, colSpan: 4000, rowSpan: 2250 } }));
       }
     };
     window.addEventListener("paste", handlePaste);
     return () => window.removeEventListener("paste", handlePaste);
-  }, [selectedEl, updateEl, addEl]);
+  }, [selectedLeaf, dispatchOp, addLeaf]);
 
-  const commitMove   = (id: string, p: GridPlacement) => updateEl(id, (e) => ({ ...e, placement: p }));
-  const commitResize = (id: string, p: GridPlacement) => updateEl(id, (e) => ({ ...e, placement: p }));
-  const commitText   = (id: string, content: string) => {
-    updateEl(id, (e) => ({ ...e, text: { ...e.text!, content } }));
+  const commitMove   = (id: string, p: GridPlacement) => dispatchOp({ op: "setPlacement", nodeId: id, placement: p });
+  const commitResize = (id: string, p: GridPlacement) => dispatchOp({ op: "setPlacement", nodeId: id, placement: p });
+  const commitText   = (id: string, text: string) => {
+    dispatchOp({ op: "setText", nodeId: id, text });
     setEditingElId(null);
   };
 
   const bringForward = useCallback((id: string) => {
-    updateSlide(activeId, (s) => {
-      const maxZ = s.elements.reduce((m, e) => Math.max(m, e.zIndex), 0);
-      return { ...s, elements: s.elements.map((e) => e.id === id ? { ...e, zIndex: maxZ + 1 } : e) };
-    });
-  }, [activeId, updateSlide]);
+    const leaves = collectLeaves(activeSlide.root);
+    const maxZ = leaves.reduce((m, l) => Math.max(m, l.zIndex ?? 0), 0);
+    dispatchOp({ op: "setZIndex", nodeId: id, zIndex: maxZ + 1 });
+  }, [activeSlide.root, dispatchOp]);
 
   const sendBack = useCallback((id: string) => {
-    updateSlide(activeId, (s) => {
-      const minZ = s.elements.reduce((m, e) => Math.min(m, e.zIndex), Infinity);
-      return { ...s, elements: s.elements.map((e) => e.id === id ? { ...e, zIndex: Math.max(0, minZ - 1) } : e) };
-    });
-  }, [activeId, updateSlide]);
+    const leaves = collectLeaves(activeSlide.root);
+    const minZ = leaves.reduce((m, l) => Math.min(m, l.zIndex ?? 0), Infinity);
+    dispatchOp({ op: "setZIndex", nodeId: id, zIndex: Math.max(0, minZ - 1) });
+  }, [activeSlide.root, dispatchOp]);
 
   const applyCandidate = useCallback((candidateId: string) => {
     updateSlide(activeId, (s) => {
       const cand = s.candidates.find((c) => c.id === candidateId);
       if (!cand) return s;
-      return {
-        ...s,
-        elements: cand.elements.map((el) => ({ ...el, id: nextId() })),
-        activeDesignId: candidateId,
-      };
+      return { ...s, root: deepCloneWithNewIds(cand.root), activeDesignId: candidateId };
     });
     setSelectedElId(null);
     setEditingElId(null);
@@ -369,37 +367,35 @@ export function EditorView({
         <ToolBtn title="Redo (Ctrl+Y)" dimmed={!canRedo} onClick={redo}><Redo2 size={13} /></ToolBtn>
         <Sep />
         <FontSizeControl
-          value={selectedEl?.text?.fontSize}
+          value={textBlock?.style.fontSize}
           onChange={(size) =>
-            selectedEl && updateEl(selectedEl.id, (e) => ({ ...e, text: { ...e.text!, fontSize: size } }))
+            selectedLeaf && dispatchOp({ op: "setStyle", nodeId: selectedLeaf.id, style: { fontSize: size } })
           }
         />
         <Sep />
         <WeightSelect
-          value={selectedEl?.text?.fontWeight ?? 400}
-          disabled={!selectedEl?.text}
-          onChange={(w) => selectedEl && updateEl(selectedEl.id, (e) => ({ ...e, text: { ...e.text!, fontWeight: w } }))}
+          value={textBlock?.style.fontWeight ?? 400}
+          disabled={!textBlock}
+          onChange={(w) => selectedLeaf && dispatchOp({ op: "setStyle", nodeId: selectedLeaf.id, style: { fontWeight: w } })}
         />
         <ToolBtn
-          active={selectedEl?.text?.fontStyle === "italic"}
-          onClick={() => selectedEl && updateEl(selectedEl.id, (e) => ({
-            ...e, text: { ...e.text!, fontStyle: e.text!.fontStyle === "italic" ? "normal" : "italic" },
-          }))}
+          active={textBlock?.style.fontStyle === "italic"}
+          onClick={() => selectedLeaf && dispatchOp({ op: "setStyle", nodeId: selectedLeaf.id, style: {
+            fontStyle: textBlock?.style.fontStyle === "italic" ? "normal" : "italic",
+          }})}
         ><Italic size={12} /></ToolBtn>
         <ToolBtn
-          active={selectedEl?.text?.textDecoration === "underline"}
-          onClick={() => selectedEl && updateEl(selectedEl.id, (e) => ({
-            ...e, text: { ...e.text!, textDecoration: e.text!.textDecoration === "underline" ? "none" : "underline" },
-          }))}
+          active={textBlock?.style.textDecoration === "underline"}
+          onClick={() => selectedLeaf && dispatchOp({ op: "setStyle", nodeId: selectedLeaf.id, style: {
+            textDecoration: textBlock?.style.textDecoration === "underline" ? "none" : "underline",
+          }})}
         ><Underline size={12} /></ToolBtn>
         <Sep />
         {(["left", "center", "right"] as const).map((align, i) => (
           <ToolBtn
             key={align}
-            active={selectedEl?.text?.textAlign === align}
-            onClick={() => selectedEl && updateEl(selectedEl.id, (e) => ({
-              ...e, text: { ...e.text!, textAlign: align },
-            }))}
+            active={textBlock?.style.textAlign === align}
+            onClick={() => selectedLeaf && dispatchOp({ op: "setStyle", nodeId: selectedLeaf.id, style: { textAlign: align } })}
           >
             {[<AlignLeft size={12} />, <AlignCenter size={12} />, <AlignRight size={12} />][i]}
           </ToolBtn>
@@ -407,28 +403,28 @@ export function EditorView({
         <Sep />
         {/* ── Per-element color & opacity ── */}
         <ColorSwatch
-          color={selectedEl?.text?.color ?? selectedEl?.shape?.fill}
-          label={selectedEl?.text ? "Text color" : selectedEl?.shape ? "Fill color" : "Color"}
+          color={textBlock?.style.color ?? shapeBlock?.style.fill}
+          label={textBlock ? "Text color" : shapeBlock ? "Fill color" : "Color"}
           onChange={(hex) => {
-            if (!selectedEl) return;
-            if (selectedEl.text)  updateEl(selectedEl.id, (e) => ({ ...e, text:  { ...e.text!,  color: hex } }));
-            if (selectedEl.shape) updateEl(selectedEl.id, (e) => ({ ...e, shape: { ...e.shape!, fill:  hex } }));
+            if (!selectedLeaf) return;
+            if (textBlock)  dispatchOp({ op: "setStyle", nodeId: selectedLeaf.id, style: { color: hex } });
+            if (shapeBlock) dispatchOp({ op: "setStyle", nodeId: selectedLeaf.id, style: { fill: hex } });
           }}
         />
         <OpacityInput
-          value={selectedEl?.opacity}
-          onChange={(o) => selectedEl && updateEl(selectedEl.id, (e) => ({ ...e, opacity: o }))}
+          value={selectedLeaf?.opacity}
+          onChange={(o) => selectedLeaf && dispatchOp({ op: "setOpacity", nodeId: selectedLeaf.id, opacity: o })}
         />
         <Sep />
-        <ToolBtn title="Add text"  onClick={() => addEl(makeTextElement())}><Type size={12} /></ToolBtn>
-        <ToolBtn title="Add image" onClick={() => addEl(makeImageElement())}><ImageIcon size={12} /></ToolBtn>
-        <ToolBtn title="Add shape" onClick={() => addEl(makeShapeElement())}><Square size={12} /></ToolBtn>
+        <ToolBtn title="Add text"  onClick={() => addLeaf(makeTextLeaf())}><Type size={12} /></ToolBtn>
+        <ToolBtn title="Add image" onClick={() => addLeaf(makeImageLeaf())}><ImageIcon size={12} /></ToolBtn>
+        <ToolBtn title="Add shape" onClick={() => addLeaf(makeShapeLeaf())}><Square size={12} /></ToolBtn>
         <ToolBtn title="Layout"><LayoutTemplate size={12} /></ToolBtn>
         <Sep />
-        {selectedEl && (
+        {selectedLeaf && (
           <>
-            <ToolBtn title="Duplicate (Ctrl+D)" onClick={() => duplicateEl(selectedEl.id)}><Copy size={12} /></ToolBtn>
-            <ToolBtn title="Delete" onClick={() => deleteEl(selectedEl.id)}><Trash2 size={12} /></ToolBtn>
+            <ToolBtn title="Duplicate (Ctrl+D)" onClick={() => duplicateLeaf(selectedLeaf.id)}><Copy size={12} /></ToolBtn>
+            <ToolBtn title="Delete" onClick={() => deleteLeaf(selectedLeaf.id)}><Trash2 size={12} /></ToolBtn>
             <Sep />
           </>
         )}
@@ -562,8 +558,8 @@ export function EditorView({
                 const file = Array.from(e.dataTransfer.files).find((f) => f.type.startsWith("image/")) ?? null;
                 if (!file) return;
                 const src = URL.createObjectURL(file);
-                if (selectedEl?.type === "image") {
-                  updateEl(selectedEl.id, (el) => ({ ...el, src }));
+                if (selectedLeaf?.block.role === "image") {
+                  dispatchOp({ op: "setImageSrc", nodeId: selectedLeaf.id, src });
                 } else {
                   const colSpan = 4000;
                   const rowSpan = 2250;
@@ -572,45 +568,42 @@ export function EditorView({
                     Math.round(((e.clientX - rect.left) / rect.width) * GRID_COLS - colSpan / 2))));
                   const row = snap(Math.max(0, Math.min(GRID_ROWS - rowSpan,
                     Math.round(((e.clientY - rect.top) / rect.height) * GRID_ROWS - rowSpan / 2))));
-                  addEl(makeImageElement({ src, placement: { col, row, colSpan, rowSpan } }));
+                  addLeaf(makeImageLeaf({ block: { role: "image", src }, placement: { col, row, colSpan, rowSpan } }));
                 }
               }}
             >
               <GridOverlay visible={isGridVisible} />
 
-            {/* All content comes from the element model */}
-            {[...activeSlide.elements]
-              .sort((a, b) => a.zIndex - b.zIndex)
-              .map((el) => (
-                <CanvasElement
-                  key={el.id}
-                  el={el}
-                  selected={selectedElId === el.id}
-                  editing={editingElId === el.id}
-                  slideRef={slideRef}
-                  onSelect={() => {
-                    setSelectedElId(el.id);
-                    setRailSelectionActive(false);
-                    // Only clear editing if switching to a different element
-                    if (selectedElId !== el.id) setEditingElId(null);
-                  }}
-                  onStartEdit={() => setEditingElId(el.id)}
-                  onCommitText={(txt) => commitText(el.id, txt)}
-                  onMove={(p) => commitMove(el.id, p)}
-                  onResize={(p) => commitResize(el.id, p)}
-                />
-              ))}
+              {[...collectLeaves(activeSlide.root)]
+                .sort((a, b) => (a.zIndex ?? 0) - (b.zIndex ?? 0))
+                .map((leaf) => (
+                  <CanvasElement
+                    key={leaf.id}
+                    leaf={leaf}
+                    selected={selectedElId === leaf.id}
+                    editing={editingElId === leaf.id}
+                    slideRef={slideRef}
+                    onSelect={() => {
+                      setSelectedElId(leaf.id);
+                      setRailSelectionActive(false);
+                      if (selectedElId !== leaf.id) setEditingElId(null);
+                    }}
+                    onStartEdit={() => setEditingElId(leaf.id)}
+                    onCommitText={(txt) => commitText(leaf.id, txt)}
+                    onMove={(p) => commitMove(leaf.id, p)}
+                    onResize={(p) => commitResize(leaf.id, p)}
+                  />
+                ))}
 
-            {/* Empty-slide hint */}
-            {activeSlide.elements.length === 0 && (
-              <div
-                className="absolute inset-0 flex flex-col items-center justify-center gap-3 pointer-events-none"
-                style={{ color: "oklch(0.7 0.01 192)" }}
-              >
-                <Type size={32} strokeWidth={1} />
-                <span className="text-[13px] font-mono">Click T in the toolbar to add text</span>
-              </div>
-            )}
+              {collectLeaves(activeSlide.root).length === 0 && (
+                <div
+                  className="absolute inset-0 flex flex-col items-center justify-center gap-3 pointer-events-none"
+                  style={{ color: "oklch(0.7 0.01 192)" }}
+                >
+                  <Type size={32} strokeWidth={1} />
+                  <span className="text-[13px] font-mono">Click T in the toolbar to add text</span>
+                </div>
+              )}
             </div>
           </div>
         </div>
@@ -651,10 +644,10 @@ export function EditorView({
             )}
             {rightTab === "arrange" && (
               <ArrangePanel
-                el={selectedEl}
-                onChange={(fn) => selectedEl && updateEl(selectedEl.id, fn)}
-                onBringForward={() => selectedEl && bringForward(selectedEl.id)}
-                onSendBack={() => selectedEl && sendBack(selectedEl.id)}
+                leaf={selectedLeaf}
+                onDispatchOp={dispatchOp}
+                onBringForward={() => selectedLeaf && bringForward(selectedLeaf.id)}
+                onSendBack={() => selectedLeaf && sendBack(selectedLeaf.id)}
               />
             )}
           </div>
@@ -684,7 +677,7 @@ const HANDLE_STYLE: Record<HandlePos, React.CSSProperties> = {
 };
 
 interface CanvasElementProps {
-  el: SlideElement;
+  leaf: LeafNode;
   selected: boolean;
   editing: boolean;
   slideRef: React.RefObject<HTMLDivElement | null>;
@@ -696,7 +689,7 @@ interface CanvasElementProps {
 }
 
 function CanvasElement({
-  el, selected, editing, slideRef,
+  leaf, selected, editing, slideRef,
   onSelect, onStartEdit, onCommitText, onMove, onResize,
 }: CanvasElementProps) {
   // livePlacement drives visual re-render during drag
@@ -710,8 +703,12 @@ function CanvasElement({
     wasSelected: boolean; // captured at drag-start to avoid stale `selected` prop
   } | null>(null);
 
-  const active = livePlacement ?? el.placement;
+  const active = livePlacement ?? leaf.placement;
   const css = gridToCSS(active);
+
+  const textBlock  = leaf.block.role === "text"  ? leaf.block : null;
+  const shapeBlock = leaf.block.role === "shape" ? leaf.block : null;
+  const imageBlock = leaf.block.role === "image" ? leaf.block : null;
 
   const startDrag = (type: "move" | HandlePos, e: React.MouseEvent) => {
     e.stopPropagation();
@@ -720,7 +717,7 @@ function CanvasElement({
       type,
       startMx: e.clientX,
       startMy: e.clientY,
-      startPlacement: el.placement,
+      startPlacement: leaf.placement,
       wasSelected: selected, // capture NOW before onSelect changes state
     };
     livePlacementRef.current = null;
@@ -769,20 +766,20 @@ function CanvasElement({
   };
 
   const fontFamilyCSS =
-    el.text?.fontFamily === "mono"   ? "var(--font-mono, monospace)"  :
-    el.text?.fontFamily === "serif"  ? "var(--font-serif, serif)"     :
+    textBlock?.style.fontFamily === "mono"  ? "var(--font-mono, monospace)"  :
+    textBlock?.style.fontFamily === "serif" ? "var(--font-serif, serif)"     :
     "inherit";
 
-  const textStyle: React.CSSProperties = el.text ? {
+  const textStyle: React.CSSProperties = textBlock ? {
     width: "100%", height: "100%", padding: "4px",
-    fontSize: el.text.fontSize,
-    fontWeight: el.text.fontWeight,
-    fontStyle: el.text.fontStyle,
-    color: el.text.color,
-    textAlign: el.text.textAlign,
-    textDecoration: el.text.textDecoration,
-    lineHeight: el.text.lineHeight ?? 1.4,
-    letterSpacing: el.text.letterSpacing,
+    fontSize:       textBlock.style.fontSize,
+    fontWeight:     textBlock.style.fontWeight,
+    fontStyle:      textBlock.style.fontStyle,
+    color:          textBlock.style.color,
+    textAlign:      textBlock.style.textAlign,
+    textDecoration: textBlock.style.textDecoration,
+    lineHeight:     textBlock.style.lineHeight ?? 1.4,
+    letterSpacing:  textBlock.style.letterSpacing,
     fontFamily: fontFamilyCSS,
     wordBreak: "break-word",
     whiteSpace: "pre-wrap",
@@ -793,10 +790,10 @@ function CanvasElement({
     <div
       style={{
         ...css,
-        opacity: el.opacity,
-        transform: el.rotation ? `rotate(${el.rotation}deg)` : undefined,
+        opacity: leaf.opacity ?? 1,
+        transform: (leaf.rotation ?? 0) ? `rotate(${leaf.rotation}deg)` : undefined,
         cursor: editing ? "text" : "move",
-        zIndex: el.zIndex + 5,
+        zIndex: (leaf.zIndex ?? 1) + 5,
         userSelect: editing ? "text" : "none",
         boxSizing: "border-box",
       }}
@@ -806,11 +803,11 @@ function CanvasElement({
       }}
     >
       {/* ── Text ── */}
-      {el.type === "text" && (
+      {textBlock && (
         editing ? (
           <textarea
             autoFocus
-            defaultValue={el.text?.content}
+            defaultValue={textBlock.text}
             // BUG FIX: stopPropagation on mousedown so outer div doesn't call onSelect()
             // which would clear editingElId and exit edit mode mid-type
             onMouseDown={(e) => e.stopPropagation()}
@@ -829,28 +826,28 @@ function CanvasElement({
             }}
           />
         ) : (
-          <div style={textStyle}>{el.text?.content}</div>
+          <div style={textStyle}>{textBlock.text}</div>
         )
       )}
 
       {/* ── Shape ── */}
-      {el.type === "shape" && (
+      {shapeBlock && (
         <div
           style={{
             width: "100%", height: "100%",
-            background: el.shape?.fill,
-            borderRadius: el.shape?.borderRadius,
-            border: (el.shape?.strokeWidth ?? 0) > 0
-              ? `${el.shape!.strokeWidth}px solid ${el.shape!.stroke}`
+            background: shapeBlock.style.fill,
+            borderRadius: shapeBlock.style.borderRadius,
+            border: (shapeBlock.style.strokeWidth ?? 0) > 0
+              ? `${shapeBlock.style.strokeWidth}px solid ${shapeBlock.style.stroke}`
               : undefined,
           }}
         />
       )}
 
       {/* ── Image ── */}
-      {el.type === "image" && (
-        el.src ? (
-          <img src={el.src} style={{ width: "100%", height: "100%", objectFit: "cover" }} />
+      {imageBlock && (
+        imageBlock.src ? (
+          <img src={imageBlock.src} style={{ width: "100%", height: "100%", objectFit: "cover" }} />
         ) : (
           <div
             style={{
@@ -1088,9 +1085,9 @@ function DesignsPanel({
                 : "border-border hover:border-[color:var(--accent-teal)]/50"
             }`}
           >
-            {/* Mini slide preview — reuses SlideThumb with candidate's elements */}
+            {/* Mini slide preview — reuses SlideThumb with candidate's root */}
             <div className="relative w-full overflow-hidden bg-white" style={{ aspectRatio: "16/9" }}>
-              <SlideThumb node={{ ...slide, elements: cand.elements }} />
+              <SlideThumb node={{ ...slide, root: cand.root }} />
             </div>
             <div
               className={`flex items-center justify-between px-2 py-1.5 text-[10px] font-medium ${
@@ -1118,27 +1115,29 @@ function DesignsPanel({
 
 // ─── Arrange panel ────────────────────────────────────────────────────────────
 interface ArrangePanelProps {
-  el: SlideElement | null;
-  onChange: (fn: (e: SlideElement) => SlideElement) => void;
+  leaf: LeafNode | null;
+  onDispatchOp: (op: SlideEditOp) => void;
   onBringForward: () => void;
   onSendBack: () => void;
 }
 
-function ArrangePanel({ el, onChange, onBringForward, onSendBack }: ArrangePanelProps) {
-  const p = el?.placement;
+function ArrangePanel({ leaf, onDispatchOp, onBringForward, onSendBack }: ArrangePanelProps) {
+  const p = leaf?.placement;
 
   const pctLabel = (v: number, max: number) => `${((v / max) * 100).toFixed(1)}%`;
   const setPlacement = (key: keyof GridPlacement, raw: string) => {
     const num = parseFloat(raw);
-    if (!Number.isFinite(num) || !el) return;
-    onChange((e) => ({ ...e, placement: { ...e.placement, [key]: snap(num) } }));
+    if (!Number.isFinite(num) || !leaf) return;
+    onDispatchOp({ op: "setPlacement", nodeId: leaf.id, placement: { ...leaf.placement, [key]: snap(num) } });
   };
+
+  const shapeBlock = leaf?.block.role === "shape" ? leaf.block : null;
 
   return (
     <div className="flex-1 overflow-y-auto p-3 space-y-4 text-[11px]">
-      {!el && <div className="text-center text-muted-foreground py-8 text-[11px]">Select an element to arrange</div>}
+      {!leaf && <div className="text-center text-muted-foreground py-8 text-[11px]">Select an element to arrange</div>}
 
-      {el && p && (
+      {leaf && p && (
         <>
           <Section label="Position">
             <div className="grid grid-cols-2 gap-2">
@@ -1182,8 +1181,8 @@ function ArrangePanel({ el, onChange, onBringForward, onSendBack }: ArrangePanel
             <Row label="Angle">
               <div className="flex items-center gap-1.5">
                 <input
-                  type="number" min={-180} max={180} value={el.rotation}
-                  onChange={(e) => onChange((el) => ({ ...el, rotation: Number(e.target.value) }))}
+                  type="number" min={-180} max={180} value={leaf.rotation ?? 0}
+                  onChange={(e) => onDispatchOp({ op: "setRotation", nodeId: leaf.id, rotation: Number(e.target.value) })}
                   className="w-16 px-2 py-1 border border-border rounded text-[11px] bg-card text-ink outline-none focus:border-[color:var(--accent-teal)]"
                 />
                 <span className="text-muted-foreground">°</span>
@@ -1192,23 +1191,23 @@ function ArrangePanel({ el, onChange, onBringForward, onSendBack }: ArrangePanel
           </Section>
 
           <Section label="Layer">
-            <Row label="Z-index"><span className="font-mono text-[10px]">{el.zIndex}</span></Row>
+            <Row label="Z-index"><span className="font-mono text-[10px]">{leaf.zIndex ?? 0}</span></Row>
             <div className="flex gap-1.5 mt-1">
               <button onClick={onBringForward} className="flex-1 py-1.5 text-[10px] font-medium border border-border rounded hover:bg-canvas/50 transition-colors">Bring to Front</button>
               <button onClick={onSendBack}     className="flex-1 py-1.5 text-[10px] font-medium border border-border rounded hover:bg-canvas/50 transition-colors">Send to Back</button>
             </div>
           </Section>
 
-          {el.shape && (
+          {shapeBlock && (
             <Section label="Shape">
               <Row label="Radius">
                 <div className="flex items-center gap-1.5">
                   <input
-                    type="range" min={0} max={100} value={el.shape.borderRadius}
-                    onChange={(e) => onChange((el) => ({ ...el, shape: { ...el.shape!, borderRadius: Number(e.target.value) } }))}
+                    type="range" min={0} max={100} value={shapeBlock.style.borderRadius}
+                    onChange={(e) => onDispatchOp({ op: "setStyle", nodeId: leaf.id, style: { borderRadius: Number(e.target.value) } })}
                     className="w-20 accent-[color:var(--accent-teal)]"
                   />
-                  <span className="font-mono text-[10px] w-6">{el.shape.borderRadius}</span>
+                  <span className="font-mono text-[10px] w-6">{shapeBlock.style.borderRadius}</span>
                 </div>
               </Row>
             </Section>

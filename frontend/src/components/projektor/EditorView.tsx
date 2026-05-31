@@ -1,4 +1,5 @@
 import { useState, useEffect, useRef, useCallback, useReducer } from "react";
+import { loadSlides, saveSlide, seedSlides, deleteSlideDoc } from "@/lib/firestore-slides";
 import type React from "react";
 import {
   Undo2, Redo2, Italic, Underline,
@@ -43,11 +44,14 @@ const WEIGHT_OPTIONS = [
 type History = { past: SlideNode[][]; present: SlideNode[]; future: SlideNode[][] };
 type HistoryAction =
   | { type: "commit"; updater: (s: SlideNode[]) => SlideNode[] }
+  | { type: "init";   slides: SlideNode[] }
   | { type: "undo" }
   | { type: "redo" };
 
 function historyReducer(state: History, action: HistoryAction): History {
   switch (action.type) {
+    case "init":
+      return { past: [], present: action.slides, future: [] };
     case "commit":
       return {
         past: [...state.past.slice(-49), state.present],
@@ -131,6 +135,32 @@ export function EditorView({
   // Both views must read from this single edges state — no parallel copy elsewhere.
   const [edges, setEdges] = useState<Edge[]>(INITIAL_EDGES);
 
+  const [firestoreReady, setFirestoreReady] = useState(false);
+
+  // On mount: load slides from Firestore. If the collection is empty (first run),
+  // seed it from the static defaults and use those.
+  useEffect(() => {
+    loadSlides().then(async (remote) => {
+      if (remote) {
+        dispatch({ type: "init", slides: remote });
+        setActiveId(remote[0]?.id ?? "n1");
+      } else {
+        const defaults = INITIAL_NODES.map((n) => ({
+          ...n,
+          root:          INITIAL_IR_SLIDES[n.id] ?? emptyRoot(n.id),
+          candidates:    SLIDE_CANDIDATES[n.id]  ?? [],
+          activeDesignId: SLIDE_CANDIDATES[n.id]?.[0]?.id ?? null,
+        }));
+        await seedSlides(defaults);
+        dispatch({ type: "init", slides: defaults });
+      }
+      setFirestoreReady(true);
+    }).catch((err) => {
+      console.error("[firestore] Failed to load slides:", err);
+      setFirestoreReady(true); // fall back to in-memory defaults
+    });
+  }, []);
+
   const [activeId, setActiveId] = useState(startNodeId ?? "n1");
   const [selectedElId, setSelectedElId] = useState<string | null>(null);
   const [editingElId, setEditingElId] = useState<string | null>(null);
@@ -159,7 +189,15 @@ export function EditorView({
   // ── Helpers ──────────────────────────────────────────────────────────────
   const updateSlide = useCallback(
     (slideId: string, fn: (s: SlideNode) => SlideNode) =>
-      dispatch({ type: "commit", updater: (prev) => prev.map((s) => (s.id === slideId ? fn(s) : s)) }),
+      dispatch({
+        type: "commit",
+        updater: (prev) => prev.map((s) => {
+          if (s.id !== slideId) return s;
+          const next = fn(s);
+          saveSlide(next).catch((err) => console.error("[firestore] saveSlide failed:", err));
+          return next;
+        }),
+      }),
     []
   );
 
@@ -214,31 +252,27 @@ export function EditorView({
   const addSlide = useCallback(() => {
     // Stable unique ID — the graph keys nodes on this; never reassign after creation.
     const id = makeSceneId();
+    const newSlide: SlideNode = {
+      id,
+      index: slides.length + 1,
+      title: "New Slide",
+      x: 0, y: 0, rotation: 0,
+      state: "rendered" as const,
+      components: [],
+      thumb: "title" as const,
+      root: emptyRoot(id),
+      candidates: [],
+      activeDesignId: null,
+    };
     // GRAPH SYNC: adding a slide = adding a node. The graph reads from the same slides
     // state and will display it as a new node without any extra wiring.
-    dispatch({
-      type: "commit",
-      updater: (prev) => [
-        ...prev,
-        {
-          id,
-          index: prev.length + 1, // computed inside updater so it's always current
-          title: "New Slide",
-          x: 0, y: 0, rotation: 0,
-          state: "rendered" as const,
-          components: [],
-          thumb: "title" as const,
-          root: emptyRoot(id),
-          candidates: [],
-          activeDesignId: null,
-        },
-      ],
-    });
+    dispatch({ type: "commit", updater: (prev) => [...prev, newSlide] });
+    saveSlide(newSlide).catch((err) => console.error("[firestore] saveSlide failed:", err));
     setActiveId(id);
     setSelectedElId(null);
     setEditingElId(null);
     setRailSelectionActive(true);
-  }, []);
+  }, [slides.length]);
 
   const deleteSlide = useCallback((id: string) => {
     if (slides.length <= 1) return; // never remove the last scene
@@ -254,6 +288,7 @@ export function EditorView({
     // now so the graph never encounters dangling connectors when it reads this state.
     dispatch({ type: "commit", updater: (prev) => reindexSlides(prev.filter((s) => s.id !== id)) });
     setEdges((prev) => prev.filter((e) => e.from !== id && e.to !== id));
+    deleteSlideDoc(id).catch((err) => console.error("[firestore] deleteSlideDoc failed:", err));
   }, [slides]);
 
   const selectSlideFromRail = useCallback((id: string) => {
@@ -353,6 +388,14 @@ export function EditorView({
   }, [activeId, updateSlide]);
 
   // ── Render ────────────────────────────────────────────────────────────────
+  if (!firestoreReady) {
+    return (
+      <div className="flex-1 flex items-center justify-center bg-canvas/60">
+        <p className="text-[12px] font-mono text-muted-foreground">Loading slides…</p>
+      </div>
+    );
+  }
+
   return (
     <div
       className="flex-1 flex flex-col min-h-0 bg-chrome"

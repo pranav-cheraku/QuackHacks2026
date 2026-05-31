@@ -46,13 +46,17 @@ function deleteErrorMessage(err: unknown): string {
     if (code === "auth/wrong-password" || code === "auth/invalid-credential") {
       return "Incorrect password.";
     }
-    if (code === "auth/too-many-requests") return "Too many attempts. Try again later.";
+    if (code === "auth/too-many-requests")
+      return "Too many attempts. Try again later.";
     if (code === "auth/popup-closed-by-user") return "Confirmation cancelled.";
   }
   return "Something went wrong. Please try again.";
 }
 
-function getInitials(user: { displayName: string | null; email: string | null }): string {
+function getInitials(user: {
+  displayName: string | null;
+  email: string | null;
+}): string {
   if (user.displayName) {
     const parts = user.displayName.trim().split(/\s+/);
     return parts.length >= 2
@@ -193,7 +197,10 @@ export function TopBar({
                 ) : (
                   <span
                     className="w-full h-full flex items-center justify-center text-[12px] font-semibold"
-                    style={{ background: "var(--accent-soft)", color: "var(--accent)" }}
+                    style={{
+                      background: "var(--accent-soft)",
+                      color: "var(--accent)",
+                    }}
                   >
                     {getInitials(currentUser)}
                   </span>
@@ -269,9 +276,7 @@ export function TopBar({
             </p>
           )}
 
-          {deleteError && (
-            <p className="text-xs text-danger">{deleteError}</p>
-          )}
+          {deleteError && <p className="text-xs text-danger">{deleteError}</p>}
 
           <DialogFooter className="mt-2 gap-2">
             <button

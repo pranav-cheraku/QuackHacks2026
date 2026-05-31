@@ -36,10 +36,27 @@ export type SceneStatus = "final" | "draft" | "in-review";
 export type SceneRole = "claim" | "evidence" | "data" | "title";
 export type EdgeRelation = "supports" | "contrasts" | "builds-on" | "sequence";
 
+export interface ChartRow {
+  label: string;
+  value: number;
+}
+
+// A content block on a scene (the slide's "ingredients"). Listed in Inspect's
+// "Content blocks"; step 10 will also tether these to the canvas as sub-nodes.
+// `label` is the summary shown in lists; the remaining (optional) fields hold
+// the actual content the user entered in the Add-content popup, by type:
+//   text types → text   ·   Image → src   ·   Video → url   ·   Chart → data
 export interface ContentBlock {
   id: string;
   type: ComponentType;
   label: string;
+  text?: string;
+  src?: string;
+  url?: string;
+  data?: ChartRow[];
+  // Free position on the content-graph canvas (top-left). Unset → auto-row.
+  cx?: number;
+  cy?: number;
 }
 
 export type SlideState = "rendered" | "ingredient";

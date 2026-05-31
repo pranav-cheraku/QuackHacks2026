@@ -4,6 +4,7 @@ import {
   ChevronDown,
   ChevronRight,
   Image as ImageIcon,
+  LayoutGrid,
   Lock,
   Plus,
   RotateCcw,
@@ -19,10 +20,10 @@ import {
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
-import { AddContentMenu } from "./AddContentMenu";
+import { AddContent } from "./AddContent";
 import { blockIcon } from "@/lib/content-blocks";
 import type {
-  ComponentType,
+  ContentBlock,
   EdgeRelation,
   SceneRole,
   SceneStatus,
@@ -41,7 +42,7 @@ interface Props {
   onChangeRole: (id: string, r: SceneRole) => void;
   onChangeRelation: (toId: string, r: EdgeRelation) => void;
   onToggleLock: (id: string) => void;
-  onAddBlock: (id: string, type: ComponentType) => void;
+  onAddBlock: (id: string, block: Omit<ContentBlock, "id">) => void;
   onRemoveBlock: (id: string, blockId: string) => void;
   onOpenContent: (id: string) => void;
   onAccept: (id: string) => void;
@@ -127,7 +128,11 @@ export function ScenePanel({
           </button>
         </div>
         <div className="mt-1 font-serif text-[20px] leading-[1.15] text-ink truncate">
-          {selectedCount > 1 ? "Multiple scenes selected" : node ? node.title : "Your presentation"}
+          {selectedCount > 1
+            ? "Multiple scenes selected"
+            : node
+              ? node.title
+              : "Your presentation"}
         </div>
 
         {/* Tabs (committed scenes only — a ghost isn't editable yet) */}
@@ -159,7 +164,10 @@ export function ScenePanel({
 
       {/* Body */}
       {tab === "chat" ? (
-        <ChatTab title={node?.title ?? "your presentation"} selectedCount={selectedCount} />
+        <ChatTab
+          title={node?.title ?? "your presentation"}
+          selectedCount={selectedCount}
+        />
       ) : !node ? (
         <div className="flex-1 flex items-center justify-center px-6 text-center text-[13px] text-muted-foreground">
           Select a scene to inspect it.
@@ -184,6 +192,7 @@ export function ScenePanel({
           onAddBlock={onAddBlock}
           onRemoveBlock={onRemoveBlock}
           onOpenContent={onOpenContent}
+          onDelete={onDelete}
         />
       ) : (
         <StubTab tab={tab} title={node.title} />
@@ -203,6 +212,7 @@ function InspectTab({
   onAddBlock,
   onRemoveBlock,
   onOpenContent,
+  onDelete,
 }: {
   node: SlideNode;
   parentRelation: EdgeRelation | null;
@@ -211,9 +221,10 @@ function InspectTab({
   onChangeRole: (id: string, r: SceneRole) => void;
   onChangeRelation: (toId: string, r: EdgeRelation) => void;
   onToggleLock: (id: string) => void;
-  onAddBlock: (id: string, type: ComponentType) => void;
+  onAddBlock: (id: string, block: Omit<ContentBlock, "id">) => void;
   onRemoveBlock: (id: string, blockId: string) => void;
   onOpenContent: (id: string) => void;
+  onDelete: (id: string) => void;
 }) {
   const status = STATUS_OPTIONS.find((o) => o.value === node.status)!;
   const role = node.role ?? "claim";
@@ -342,19 +353,23 @@ function InspectTab({
 
         <div className="h-px bg-line-soft" />
 
-        {/* Content blocks — header opens the scene's content graph */}
+        {/* Content blocks — the header is a button that opens the scene's
+            content graph; below it, the list and the Add-content popup. */}
         <div>
-          <div className="flex items-center justify-between mb-2">
-            <button
-              type="button"
-              onClick={() => onOpenContent(node.id)}
-              className="flex items-center gap-1 text-[12px] font-semibold text-ink hover:text-accent transition-colors"
-            >
+          <button
+            type="button"
+            onClick={() => onOpenContent(node.id)}
+            className="w-full mb-2 flex items-center justify-between gap-2 px-3 py-2 rounded-lg border border-border bg-surface-2 hover:border-[color:var(--accent)] hover:bg-canvas/60 transition-colors"
+          >
+            <span className="flex items-center gap-2 text-[12.5px] font-semibold text-ink">
+              <LayoutGrid size={14} className="text-muted-foreground" />
               Content blocks
-              <ChevronRight size={13} className="text-muted-foreground" />
-            </button>
-            <AddContentMenu onAdd={(type) => onAddBlock(node.id, type)} />
-          </div>
+            </span>
+            <span className="flex items-center gap-1.5 text-muted-foreground">
+              <span className="text-[11px] font-mono">{blocks.length}</span>
+              <ChevronRight size={14} />
+            </span>
+          </button>
 
           {blocks.length === 0 ? (
             <div className="rounded-lg border border-dashed border-border px-3 py-4 text-center text-[12px] text-muted-foreground">
@@ -393,10 +408,14 @@ function InspectTab({
               })}
             </div>
           )}
+
+          <div className="mt-2">
+            <AddContent onAdd={(block) => onAddBlock(node.id, block)} />
+          </div>
         </div>
       </div>
 
-      {/* Footer: Generate scene */}
+      {/* Footer: Generate scene + permanent delete */}
       <div className="shrink-0 px-4 py-3 border-t border-border">
         <button
           type="button"
@@ -404,6 +423,13 @@ function InspectTab({
           style={{ background: "var(--accent)" }}
         >
           <Sparkles size={14} /> Generate scene
+        </button>
+        <button
+          type="button"
+          onClick={() => onDelete(node.id)}
+          className="mt-2 w-full flex items-center justify-center gap-1.5 py-1.5 rounded-lg text-[12px] font-medium text-muted-foreground hover:text-danger transition-colors"
+        >
+          <Trash2 size={13} /> Delete scene permanently
         </button>
       </div>
     </div>
@@ -438,7 +464,13 @@ interface AttachedImage {
   objectUrl: string;
 }
 
-function ChatTab({ title, selectedCount }: { title: string; selectedCount: number }) {
+function ChatTab({
+  title,
+  selectedCount,
+}: {
+  title: string;
+  selectedCount: number;
+}) {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [draft, setDraft] = useState("");
   const [attachment, setAttachment] = useState<AttachedImage | null>(null);
@@ -463,7 +495,9 @@ function ChatTab({ title, selectedCount }: { title: string; selectedCount: numbe
     const trimmed = text.trim();
     if (!trimmed && !attachment) return;
     const content = [
-      attachment ? `[Image: ${attachment.file.name} ${attachment.width}×${attachment.height}]` : "",
+      attachment
+        ? `[Image: ${attachment.file.name} ${attachment.width}×${attachment.height}]`
+        : "",
       trimmed,
     ]
       .filter(Boolean)
@@ -502,7 +536,12 @@ function ChatTab({ title, selectedCount }: { title: string; selectedCount: numbe
     const url = URL.createObjectURL(file);
     const img = new Image();
     img.onload = () => {
-      setAttachment({ file, width: img.naturalWidth, height: img.naturalHeight, objectUrl: url });
+      setAttachment({
+        file,
+        width: img.naturalWidth,
+        height: img.naturalHeight,
+        objectUrl: url,
+      });
     };
     img.src = url;
     e.target.value = "";
@@ -555,7 +594,11 @@ function ChatTab({ title, selectedCount }: { title: string; selectedCount: numbe
           <>
             {messages.map((msg) =>
               msg.role === "user" ? (
-                <div key={msg.id} className="flex justify-end" style={{ animation: "slideUp 0.25s ease-out" }}>
+                <div
+                  key={msg.id}
+                  className="flex justify-end"
+                  style={{ animation: "slideUp 0.25s ease-out" }}
+                >
                   <div
                     className="max-w-[85%] rounded-xl rounded-tr-sm px-3 py-2 text-[12px] leading-snug text-white whitespace-pre-wrap"
                     style={{ background: "var(--accent-teal)" }}
@@ -564,7 +607,11 @@ function ChatTab({ title, selectedCount }: { title: string; selectedCount: numbe
                   </div>
                 </div>
               ) : (
-                <div key={msg.id} className="flex" style={{ animation: "slideUp 0.25s ease-out" }}>
+                <div
+                  key={msg.id}
+                  className="flex"
+                  style={{ animation: "slideUp 0.25s ease-out" }}
+                >
                   <div className="max-w-[85%] bg-card border border-border rounded-xl rounded-tl-sm px-3 py-2.5 text-[12px] leading-snug text-muted-foreground whitespace-pre-wrap">
                     {msg.content}
                   </div>
@@ -572,13 +619,19 @@ function ChatTab({ title, selectedCount }: { title: string; selectedCount: numbe
               ),
             )}
             {isTyping && (
-              <div className="flex" style={{ animation: "slideUp 0.2s ease-out" }}>
+              <div
+                className="flex"
+                style={{ animation: "slideUp 0.2s ease-out" }}
+              >
                 <div className="bg-card border border-border rounded-xl rounded-tl-sm px-3 py-3 flex items-center gap-1">
                   {[0, 1, 2].map((i) => (
                     <span
                       key={i}
                       className="w-1.5 h-1.5 rounded-full bg-muted-foreground/50"
-                      style={{ animation: "dotBounce 1.1s ease-in-out infinite", animationDelay: `${i * 0.18}s` }}
+                      style={{
+                        animation: "dotBounce 1.1s ease-in-out infinite",
+                        animationDelay: `${i * 0.18}s`,
+                      }}
                     />
                   ))}
                 </div>
@@ -603,7 +656,9 @@ function ChatTab({ title, selectedCount }: { title: string; selectedCount: numbe
           <div className="flex items-center gap-1.5 px-1">
             <div className="flex items-center gap-1.5 px-2 py-1 rounded-md bg-canvas border border-border text-[11px] text-muted-foreground max-w-full overflow-hidden">
               <ImageIcon size={11} className="shrink-0 text-accent" />
-              <span className="truncate font-medium text-ink">{attachment.file.name}</span>
+              <span className="truncate font-medium text-ink">
+                {attachment.file.name}
+              </span>
               <span className="shrink-0 text-faint">
                 {attachment.width}×{attachment.height}
               </span>

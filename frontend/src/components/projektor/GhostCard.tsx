@@ -1,4 +1,4 @@
-import { useRef } from "react";
+import { useEffect, useRef } from "react";
 import { Check, RotateCcw, Sparkles, Trash2, X } from "lucide-react";
 import type { SlideNode } from "@/lib/projektor-data";
 
@@ -6,12 +6,16 @@ interface Props {
   node: SlideNode;
   selected: boolean;
   dimmed?: boolean;
+  /** Highlight as the live drop target while an arrow is being re-wired. */
+  dropTarget?: boolean;
   onSelect: () => void;
   onMove: (x: number, y: number) => void;
   onAccept: () => void;
   onDiscard: () => void;
   onReconsider: () => void;
   onDelete: () => void;
+  /** Reports the card's real rendered height so edges anchor flush to it. */
+  onMeasure?: (height: number) => void;
   zoom: number;
 }
 
@@ -21,17 +25,38 @@ export function GhostCard({
   node,
   selected,
   dimmed = false,
+  dropTarget = false,
   onSelect,
   onMove,
   onAccept,
   onDiscard,
   onReconsider,
   onDelete,
+  onMeasure,
   zoom,
 }: Props) {
   const dragging = useRef<{ ox: number; oy: number } | null>(null);
   const w = node.width ?? 300;
   const discarded = Boolean(node.discarded);
+
+  // Report real rendered height so edges/affordances anchor flush to the card.
+  const cardRef = useRef<HTMLDivElement>(null);
+  const onMeasureRef = useRef(onMeasure);
+  onMeasureRef.current = onMeasure;
+  useEffect(() => {
+    const el = cardRef.current;
+    if (!el) return;
+    // Skip 0 (e.g. while the board is hidden via display:none) so we keep the
+    // last real height instead of collapsing arrow anchors to the card top.
+    const report = () => {
+      const h = el.offsetHeight;
+      if (h > 0) onMeasureRef.current?.(h);
+    };
+    report();
+    const ro = new ResizeObserver(report);
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, []);
 
   const onMouseDown = (e: React.MouseEvent) => {
     if ((e.target as HTMLElement).closest("[data-no-drag]")) return;
@@ -63,8 +88,13 @@ export function GhostCard({
       onMouseDown={onMouseDown}
     >
       <div
+        ref={cardRef}
         className={`rounded-2xl border-2 border-dashed p-4 transition-all ${
-          selected ? "ring-2 ring-[color:var(--accent)]" : ""
+          dropTarget
+            ? "ring-[3px] ring-[color:var(--accent)] shadow-[0_0_0_6px_var(--accent-soft)]"
+            : selected
+              ? "ring-2 ring-[color:var(--accent)]"
+              : ""
         }`}
         style={{
           borderColor: discarded ? "var(--border)" : "var(--accent-line)",

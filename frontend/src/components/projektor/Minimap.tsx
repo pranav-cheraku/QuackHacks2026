@@ -59,7 +59,7 @@ export function Minimap({
 
   return (
     <div
-      className="absolute right-4 bottom-4 z-10 rounded-xl border border-border bg-surface-2 shadow-[var(--sh-v)] overflow-hidden"
+      className="absolute left-4 bottom-4 z-10 rounded-xl border border-border bg-surface-2 shadow-[var(--sh-v)] overflow-hidden"
       style={{ width: W, height: H }}
       onMouseDown={(e) => e.stopPropagation()}
     >

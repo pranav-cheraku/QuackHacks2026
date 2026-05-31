@@ -116,7 +116,7 @@ function buildSlideNodes(chunks: ChunkResult[]): Pick<HydrateResult, "nodes" | "
     height: ROW_H,
     state: "rendered" as SlideState,
     designStatus: "bucket" as DesignStatus,
-    elements: [],
+    thumb: "title" as const,
     candidates: [],
     activeDesignId: null as null,
   };

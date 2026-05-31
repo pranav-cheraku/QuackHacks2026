@@ -22,20 +22,19 @@ function buildPath(
   a: { x: number; y: number },
   b: { x: number; y: number },
 ): string {
-  const dx = b.x - a.x;
+  // Vertical S-curve: flows downward from a (source bottom) to b (target top).
   const dy = b.y - a.y;
-  const cx1 = a.x + dx * 0.4;
-  const cy1 = a.y + dy * 0.15 - Math.abs(dx) * 0.08;
-  const cx2 = a.x + dx * 0.6;
-  const cy2 = b.y - dy * 0.15 + Math.abs(dx) * 0.08;
-  return `M ${a.x} ${a.y} C ${cx1} ${cy1}, ${cx2} ${cy2}, ${b.x} ${b.y}`;
+  const cy1 = a.y + dy * 0.5;
+  const cy2 = b.y - dy * 0.5;
+  return `M ${a.x} ${a.y} C ${a.x} ${cy1}, ${b.x} ${cy2}, ${b.x} ${b.y}`;
 }
 
-function anchor(n: SlideNode, side: "right" | "left" | "bottom") {
-  const w = n.width ?? 280;
-  const h = n.height ?? 170;
+function anchor(n: SlideNode, side: "right" | "left" | "top" | "bottom") {
+  const w = n.width ?? 320;
+  const h = n.height ?? 180;
   if (side === "right") return { x: n.x + w, y: n.y + h / 2 };
   if (side === "left") return { x: n.x, y: n.y + h / 2 };
+  if (side === "top") return { x: n.x + w / 2, y: n.y };
   return { x: n.x + w / 2, y: n.y + h };
 }
 
@@ -140,47 +139,47 @@ export function BoardView({ zoom, setZoom, onOpenEditor }: Props) {
                   refY="4"
                   orient="auto"
                 >
-                  <path
-                    d="M0,0 L6,4 L0,8 Z"
-                    fill="oklch(0.54 0.105 192)"
-                    opacity="0.75"
-                  />
+                  <path d="M0,0 L6,4 L0,8 Z" fill="var(--accent)" />
                 </marker>
               </defs>
               {edges.map((e, i) => {
-                const a = anchor(findNode(e.from), "right");
-                const b = anchor(findNode(e.to), "left");
+                const a = anchor(findNode(e.from), "bottom");
+                const b = anchor(findNode(e.to), "top");
                 return (
                   <path
                     key={i}
                     d={buildPath(a, b)}
                     fill="none"
-                    stroke="oklch(0.54 0.105 192)"
-                    strokeOpacity="0.55"
-                    strokeWidth="1.5"
+                    stroke="var(--accent)"
+                    strokeOpacity="0.85"
+                    strokeWidth="1.75"
                     strokeDasharray={e.dashed ? "5 4" : undefined}
                     markerEnd="url(#arrowhead)"
                   />
                 );
               })}
-              {variants.map((v) => {
-                const parent = findNode(v.parentId);
-                const a = anchor(parent, "bottom");
-                const b = { x: v.x + 80, y: v.y };
-                return (
-                  <path
-                    key={v.id}
-                    d={buildPath(a, b)}
-                    fill="none"
-                    stroke="oklch(0.54 0.105 192)"
-                    strokeOpacity="0.5"
-                    strokeWidth="1.25"
-                    strokeDasharray="4 4"
-                    markerEnd="url(#arrowhead)"
-                  />
-                );
-              })}
             </svg>
+
+            {/* Edge relation labels */}
+            {edges.map((e, i) => {
+              if (!e.relation) return null;
+              const a = anchor(findNode(e.from), "bottom");
+              const b = anchor(findNode(e.to), "top");
+              return (
+                <div
+                  key={`edge-label-${i}`}
+                  className="absolute -translate-x-1/2 -translate-y-1/2 px-2 py-0.5 rounded-full text-[10px] font-medium pointer-events-none"
+                  style={{
+                    left: (a.x + b.x) / 2,
+                    top: (a.y + b.y) / 2,
+                    background: "var(--accent-soft)",
+                    color: "var(--accent-press)",
+                  }}
+                >
+                  {e.relation}
+                </div>
+              );
+            })}
 
             {/* Nodes */}
             {nodes.map((n) => (

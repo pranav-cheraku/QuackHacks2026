@@ -32,7 +32,9 @@
       "zod": ["./node_modules/zod"],
       "zod/*": ["./node_modules/zod/*"],
       "@google/generative-ai": ["./node_modules/@google/generative-ai"],
-      "@google/generative-ai/*": ["./node_modules/@google/generative-ai/*"]
+      "@google/generative-ai/*": ["./node_modules/@google/generative-ai/*"],
+      "firebase": ["./node_modules/firebase"],
+      "firebase/*": ["./node_modules/firebase/*"]
     }
   }
 }

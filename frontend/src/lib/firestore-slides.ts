@@ -1,11 +1,11 @@
 import {
   collection, doc,
-  getDocs, setDoc, deleteDoc,
+  getDocs, getDoc, setDoc, deleteDoc,
 } from 'firebase/firestore';
 import { db } from './firebase';
 import { LayoutNodeSchema } from './ir';
 import type { LayoutNode } from './ir';
-import type { SlideNode } from './projektor-data';
+import type { SlideNode, Edge } from './projektor-data';
 import { SLIDE_CANDIDATES } from './slide-candidates';
 
 const COL = 'slides';
@@ -82,4 +82,29 @@ export async function seedSlides(slides: SlideNode[]): Promise<void> {
 // Remove a slide document from Firestore.
 export async function deleteSlideDoc(slideId: string): Promise<void> {
   await deleteDoc(doc(db, COL, slideId));
+}
+
+// ── User-scoped deck persistence ──────────────────────────────────────────────
+// Persists the entire deck (nodes + edges) as a single Firestore document at
+// users/{uid}/decks/current. Both Graph View and Slide View project this
+// document — it is the single source of truth for the deck.
+
+// Save the full deck for the authenticated user.
+export async function saveDeck(uid: string, nodes: SlideNode[], edges: Edge[]): Promise<void> {
+  await setDoc(
+    doc(db, 'users', uid, 'decks', 'current'),
+    serialize({ nodes, edges, updatedAt: Date.now() }),
+  );
+}
+
+// Load the user's saved deck. Returns null on first run (no document yet).
+export async function loadDeck(uid: string): Promise<{ nodes: SlideNode[]; edges: Edge[] } | null> {
+  const snap = await getDoc(doc(db, 'users', uid, 'decks', 'current'));
+  if (!snap.exists()) return null;
+  const data = snap.data();
+  if (!Array.isArray(data.nodes) || data.nodes.length === 0) return null;
+  return {
+    nodes: data.nodes as SlideNode[],
+    edges: Array.isArray(data.edges) ? (data.edges as Edge[]) : [],
+  };
 }

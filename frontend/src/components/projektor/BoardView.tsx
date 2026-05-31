@@ -1,5 +1,7 @@
 import { useEffect, useRef, useState } from "react";
-import { loadSlides } from "@/lib/firestore-slides";
+import { loadSlides, loadDeck, saveDeck } from "@/lib/firestore-slides";
+import { useAuth } from "@/context/AuthContext";
+import { expandNode } from "@/lib/expandApi";
 import { GraphMapPanel } from "./GraphMapPanel";
 import { GraphToolRail } from "./GraphToolRail";
 import { StatusFilterPanel } from "./StatusFilterPanel";
@@ -234,24 +236,52 @@ export function BoardView({
   const blockSeq = useRef(0); // monotonic ids for added content blocks
   const genSeq = useRef(0); // monotonic ids for generated candidate nodes
   const newSeq = useRef(0); // monotonic ids for blank scenes added from the rail
+  const saveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const [generatingFor, setGeneratingFor] = useState<string | null>(null);
+  const { currentUser } = useAuth();
 
-  // Load slides from Firestore on mount so the graph reflects the live database.
-  // Only runs when using the default board (no custom deck passed via props) —
-  // if a custom deck was loaded (e.g. from the chunker), its nodes/edges must
-  // not be overwritten. frameNodes auto-fits the viewport so every node,
-  // including the rightmost leaf and its Generate-next button, is visible.
+  // Load deck from Firestore on mount. Only runs for the default board (no custom
+  // deck passed via props) — generated decks must not be overwritten on load.
+  // Falls back to the legacy per-slide loadSlides() if no deck document exists yet.
+  // frameNodes auto-fits so every node including Generate-next buttons is visible.
   useEffect(() => {
-    if (initialNodes !== INITIAL_NODES) return;
-    loadSlides()
-      .then((remote) => {
-        if (remote && remote.length > 0) {
-          setNodes(remote);
-          setTimeout(() => frameNodes(remote), 0);
+    if (!currentUser || initialNodes !== INITIAL_NODES) return;
+    loadDeck(currentUser.uid)
+      .then((saved) => {
+        if (saved && saved.nodes.length > 0) {
+          setNodes(saved.nodes);
+          setEdges(saved.edges);
+          setTimeout(() => frameNodes(saved.nodes), 0);
+        } else {
+          // Legacy fallback: individual slide documents (pre-deck-persistence era)
+          return loadSlides().then((remote) => {
+            if (remote && remote.length > 0) {
+              setNodes(remote);
+              setTimeout(() => frameNodes(remote), 0);
+            }
+          });
         }
       })
-      .catch((err) => console.error("[BoardView] Failed to load slides:", err));
+      .catch((err) => console.error("[BoardView] Failed to load deck:", err));
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [currentUser]);
+
+  // Auto-save the deck to Firestore whenever nodes or edges change (debounced).
+  // Scoped to the authenticated user — both views project this same document.
+  // GRAPH SYNC: this is the write side of the deck ↔ Firestore binding.
+  useEffect(() => {
+    if (!currentUser) return;
+    if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
+    saveTimerRef.current = setTimeout(() => {
+      saveDeck(currentUser.uid, nodes, edges).catch((err) =>
+        console.error("[BoardView] Failed to save deck:", err),
+      );
+    }, 1500);
+    return () => {
+      if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [nodes, edges, currentUser]);
 
   const findNode = (id: string) => nodes.find((n) => n.id === id)!;
 
@@ -444,47 +474,91 @@ export function BoardView({
   // Auto-tidy: reflow the tree into a clean layered layout, in place.
   const autoTidy = () => setNodes((ns) => tidyNodes(ns, edges));
 
-  // Generate: spawn two AI candidate options below a card, then tidy so the
-  // growing tree stays readable. Works on any card — committed or ghost — so
-  // the possibility tree expands by clicking Generate, fork after fork.
-  const generateOptions = (parentId: string) => {
+  // EXPANSION AGENT: input = box content + deck context → output = populated child
+  // boxes; inserted via the existing extend mechanism (ghost nodes + dashed edges).
+  //
+  // Calls the Gemini expansion agent (expandNode server function) to generate two
+  // candidate next-slides with real content derived from the parent box and deck
+  // context. Falls back to the local SUGGESTIONS pool if the agent is unavailable.
+  // Shows a spinner on the GenerateNode button while the request is in flight.
+  const generateOptions = async (parentId: string) => {
     const parent = nodes.find((n) => n.id === parentId);
-    if (!parent) return;
+    if (!parent || generatingFor) return;
+    setGeneratingFor(parentId);
+
+    type Pick = { headline: string; body: string; kind: SceneKind; eyebrow?: string; rationale?: string };
+    let picks: Pick[];
+
+    try {
+      const result = await expandNode({
+        data: {
+          parent: {
+            headline: parent.title,
+            body: parent.body ?? "",
+            kind: parent.kind,
+            eyebrow: parent.eyebrow,
+          },
+          deckTitle: nodes.find((n) => n.kind === "title")?.title ?? "Untitled",
+          existingTitles: nodes.map((n) => n.title),
+        },
+      });
+      // Validate: need at least 2 expansions; slice to exactly 2
+      if (!result.expansions || result.expansions.length < 1) throw new Error("Empty expansions");
+      picks = result.expansions.slice(0, 2).map((e) => ({
+        headline: e.headline,
+        body: e.body,
+        kind: e.kind as SceneKind,
+        eyebrow: e.eyebrow,
+        rationale: e.rationale,
+      }));
+      // Pad to 2 with SUGGESTIONS if agent returned only 1
+      while (picks.length < 2) {
+        const k = genSeq.current + picks.length;
+        const s = SUGGESTIONS[k % SUGGESTIONS.length];
+        picks.push({ headline: s.title, body: "", kind: s.kind, rationale: s.rationale });
+      }
+    } catch {
+      // Fallback: local SUGGESTIONS with empty body
+      const k = genSeq.current;
+      picks = [
+        { headline: SUGGESTIONS[k % SUGGESTIONS.length].title, body: "", kind: SUGGESTIONS[k % SUGGESTIONS.length].kind, rationale: SUGGESTIONS[k % SUGGESTIONS.length].rationale },
+        { headline: SUGGESTIONS[(k + 1) % SUGGESTIONS.length].title, body: "", kind: SUGGESTIONS[(k + 1) % SUGGESTIONS.length].kind, rationale: SUGGESTIONS[(k + 1) % SUGGESTIONS.length].rationale },
+      ];
+    }
+
     const maxIndex = nodes.reduce((m, n) => Math.max(m, n.index), 0);
-    const k = genSeq.current;
     genSeq.current += 2;
-    const picks = [
-      SUGGESTIONS[k % SUGGESTIONS.length],
-      SUGGESTIONS[(k + 1) % SUGGESTIONS.length],
-    ];
     const newGhosts: SlideNode[] = picks.map((p, i) => ({
       id: `gen-${genSeq.current}-${i}`,
       index: maxIndex + 1 + i,
-      title: p.title,
+      title: p.headline,
+      body: p.body,
+      eyebrow: p.eyebrow,
       kind: p.kind,
-      status: "draft",
+      status: "draft" as SceneStatus,
       ghost: true,
       rationale: p.rationale,
-      // Rough position; tidyNodes overrides it. Required by the type.
       x: parent.x,
       y: parent.y + (parent.height ?? 180) + 300,
       width: 280,
       height: 168,
-      state: "ingredient",
-      thumb: "list",
+      state: "ingredient" as const,
+      designStatus: "bucket" as const,
+      thumb: "list" as const,
       candidates: [],
       activeDesignId: null,
     }));
     const newEdges: Edge[] = newGhosts.map((g) => ({
       from: parentId,
       to: g.id,
-      relation: "sequence",
+      relation: "sequence" as EdgeRelation,
       dashed: true,
     }));
     const nextEdges = [...edges, ...newEdges];
     setEdges(nextEdges);
     setNodes(tidyNodes([...nodes, ...newGhosts], nextEdges));
     selectNode(parentId);
+    setGeneratingFor(null);
   };
 
   // Outline click → select the node and fly the canvas to center it.
@@ -1066,8 +1140,9 @@ export function BoardView({
                 style={{ left: cx - 84, top }}
               >
                 <GenerateNode
-                  onClick={() => generateOptions(n.id)}
+                  onClick={() => { void generateOptions(n.id); }}
                   dimmed={isNodeDimmed(n)}
+                  loading={generatingFor === n.id}
                 />
               </div>
             );

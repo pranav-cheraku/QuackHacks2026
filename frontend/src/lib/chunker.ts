@@ -93,27 +93,29 @@ function mockChunkIntoScenes(text: string, targetCount: number): ChunkResult[] {
 }
 
 // ── Bucket hydration ──────────────────────────────────────────────────────────
-// Maps ChunkResult[] → raw bucket nodes + narrative edges.
+// Maps ChunkResult[] → root title bucket + exactly 2 path buckets + branch edges.
 //
-// Graph structure:
-//   • Title bucket   — top-center, the argument's entry point
-//   • Storyboard buckets — grid of rows below the title, left-to-right narrative flow
-//   • Edges: title → first storyboard (main entry), then sequence between storyboards
+// Graph structure (initial):
+//   • Title bucket   — top-center, root of the argument tree
+//   • Path A, Path B — two branch nodes below the title (the first fork)
+//   • Edges: title →branch→ pathA, title →branch→ pathB
 //
-// IMPORTANT: these are INFO BUCKETS, not slides. elements[] is empty.
+// The tree grows on-demand: each leaf node has a "Generate next" button that
+// calls the Gemini expansion agent (BoardView.generateOptions) to spawn 2 new
+// child nodes with real content. Remaining Gemini chunks are discarded here —
+// the user explores the narrative by extending one branch at a time.
+//
+// IMPORTANT: these are INFO BUCKETS, not slides. root is undefined.
 // Slide design happens lazily on double-click via the slide-design agent
 // (see slideDesignAgent.ts — SLIDE-DESIGN AGENT SWAP POINT).
 function buildSlideNodes(chunks: ChunkResult[]): Pick<HydrateResult, "nodes" | "edges"> {
-  const COLS_PER_ROW = 4;
-  const COL_W = 360;
-  const COL_GAP = 40;
-  const ROW_H = 240;
-  const ROW_GAP = 60;
+  const NODE_W = 320;
+  const NODE_H = 200;
   const ts = Date.now();
 
   const bucketBase = {
-    width: COL_W,
-    height: ROW_H,
+    width: NODE_W,
+    height: NODE_H,
     state: "rendered" as SlideState,
     designStatus: "bucket" as DesignStatus,
     thumb: "title" as const,
@@ -121,20 +123,25 @@ function buildSlideNodes(chunks: ChunkResult[]): Pick<HydrateResult, "nodes" | "
     activeDesignId: null as null,
   };
 
-  // Separate title bucket (first kind="title" chunk) from storyboard chunks.
-  // If Gemini doesn't produce a title chunk, synthesize one from the first chunk.
+  // Separate title chunk from path chunks. If Gemini doesn't emit a title kind,
+  // synthesize one from the first chunk so the root always exists.
   const titleIdx = chunks.findIndex((c) => c.kind === "title");
   const titleChunk: ChunkResult =
     titleIdx >= 0
       ? chunks[titleIdx]
       : { headline: chunks[0]?.headline ?? "Untitled", body: chunks[0]?.body ?? "", kind: "title" };
-  const storyChunks = titleIdx >= 0
+
+  // Take exactly 2 non-title chunks as the initial path boxes; the rest are
+  // discarded here — the user expands the tree via "Generate next" on each leaf.
+  const remaining = titleIdx >= 0
     ? chunks.filter((_, i) => i !== titleIdx)
     : chunks.slice(1);
+  const pathChunks = remaining.slice(0, 2);
 
-  // Title node — centered above the storyboard grid
-  const gridWidth = COLS_PER_ROW * COL_W + (COLS_PER_ROW - 1) * COL_GAP;
-  const titleX = 80 + gridWidth / 2 - COL_W / 2;
+  // Title node — centered horizontally above the two path nodes
+  const BRANCH_GAP = 80;                             // horizontal gap between path nodes
+  const totalPathWidth = 2 * NODE_W + BRANCH_GAP;
+  const titleX = 80 + totalPathWidth / 2 - NODE_W / 2;
   const titleNode: SlideNode = {
     id: `gen-title-${ts}`,
     index: 1,
@@ -144,40 +151,35 @@ function buildSlideNodes(chunks: ChunkResult[]): Pick<HydrateResult, "nodes" | "
     eyebrow: titleChunk.eyebrow,
     body: titleChunk.body,
     x: titleX,
-    y: 50,
+    y: 60,
     ...bucketBase,
   };
 
-  // Storyboard nodes — 4-column grid, two rows below the title node
-  const STORY_Y = 50 + ROW_H + ROW_GAP * 2;
-  const storyNodes: SlideNode[] = storyChunks.map((chunk, i) => ({
-    id: `gen-${ts}-${i}`,
+  // Path nodes — two branches side by side below the title
+  const PATH_Y = 60 + NODE_H + 140;
+  const pathNodes: SlideNode[] = pathChunks.map((chunk, i) => ({
+    id: `gen-${ts}-path-${i}`,
     index: i + 2,
     title: chunk.headline,
     kind: chunk.kind as SceneKind,
     status: "draft" as SceneStatus,
     eyebrow: chunk.eyebrow,
     body: chunk.body,
-    x: 80 + (i % COLS_PER_ROW) * (COL_W + COL_GAP),
-    y: STORY_Y + Math.floor(i / COLS_PER_ROW) * (ROW_H + ROW_GAP),
+    x: 80 + i * (NODE_W + BRANCH_GAP),
+    y: PATH_Y,
     ...bucketBase,
   }));
 
-  const nodes = [titleNode, ...storyNodes];
+  // Branch edges: title → each path node (type "branch", dashed visual)
+  const edges: Edge[] = pathNodes.map((p) => ({
+    from: titleNode.id,
+    to: p.id,
+    type: "branch" as const,
+    relation: "sequence" as EdgeRelation,
+    dashed: true,
+  }));
 
-  // Edges: title → first storyboard node (entry), then sequence through narrative
-  const edges: Edge[] = [
-    ...(storyNodes.length > 0
-      ? [{ from: titleNode.id, to: storyNodes[0].id, relation: "sequence" as EdgeRelation }]
-      : []),
-    ...storyNodes.slice(0, -1).map((n, i) => ({
-      from: n.id,
-      to: storyNodes[i + 1].id,
-      relation: "sequence" as EdgeRelation,
-    })),
-  ];
-
-  return { nodes, edges };
+  return { nodes: [titleNode, ...pathNodes], edges };
 }
 
 // ── Public API ────────────────────────────────────────────────────────────────

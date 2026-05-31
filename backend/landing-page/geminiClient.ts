@@ -100,3 +100,67 @@ export function getChunkingModel() {
     },
   });
 }
+
+// ── Expansion response schema ─────────────────────────────────────────────────
+// Used by expandAgent.ts. Gemini returns an object with an "expansions" array
+// so the model can produce multiple candidate next-slides in one call.
+export const EXPANSION_RESPONSE_SCHEMA: Schema = {
+  type: SchemaType.OBJECT,
+  properties: {
+    expansions: {
+      type: SchemaType.ARRAY,
+      items: {
+        type: SchemaType.OBJECT,
+        properties: {
+          headline: { type: SchemaType.STRING, description: "Punchy slide title, max 10 words" },
+          body: {
+            type: SchemaType.STRING,
+            description: "Supporting content: 2-4 sentences OR 3-5 bullet points prefixed with • ",
+          },
+          kind: {
+            type: SchemaType.STRING,
+            format: "enum",
+            enum: ["title", "problem", "data"],
+            description: "title = opening/closing; problem = challenge/need; data = evidence/solution",
+          },
+          eyebrow: {
+            type: SchemaType.STRING,
+            description: "Optional ALL CAPS section label, max 4 words",
+          },
+          rationale: {
+            type: SchemaType.STRING,
+            description: "One sentence on why this slide comes next in the narrative",
+          },
+        },
+        required: ["headline", "body", "kind"],
+      },
+    },
+  },
+  required: ["expansions"],
+};
+
+const EXPANSION_SYSTEM_INSTRUCTION = `You are a presentation architect. Given a slide and its deck context, generate exactly 2 compelling next-slide options that could follow it.
+
+Rules:
+- Each expansion must carry exactly ONE clear idea that logically follows the parent slide
+- Headlines: punchy, max 8 words, skip articles where possible
+- Body: 2-4 sentences OR 3-5 bullet points prefixed with "• "
+- Kind mapping: "title" = theme/closing, "problem" = challenge/gap/need, "data" = evidence/metric/solution/feature
+- Eyebrow: sparingly, ALL CAPS, ≤4 words — section transitions only
+- Rationale: one sentence explaining the narrative logic
+- Do NOT repeat any existing slide title from the deck
+- Always return exactly 2 expansions in the array
+- Return ONLY the JSON object. No prose, no markdown fences.`;
+
+// ── EXPANSION MODEL SWAP POINT ────────────────────────────────────────────────
+// To change the model: update the `model` string below.
+export function getExpansionModel() {
+  return getClient().getGenerativeModel({
+    model: "gemini-2.5-flash",
+    systemInstruction: EXPANSION_SYSTEM_INSTRUCTION,
+    generationConfig: {
+      responseMimeType: "application/json",
+      responseSchema: EXPANSION_RESPONSE_SCHEMA,
+    },
+  });
+}

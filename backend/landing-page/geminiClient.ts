@@ -164,3 +164,96 @@ export function getExpansionModel() {
     },
   });
 }
+
+// ── Edit response schema ────────────────────────────────────────────────────────
+// Used by editAgent.ts. A FLAT op shape (op + optional fields) — Gemini's
+// responseSchema can't express discriminated unions, so the frontend narrows each
+// op by its `op` field. See editSchema.ts for the matching Zod validator.
+export const EDIT_RESPONSE_SCHEMA: Schema = {
+  type: SchemaType.OBJECT,
+  properties: {
+    summary: {
+      type: SchemaType.STRING,
+      description: "One sentence describing the proposed changes",
+    },
+    ops: {
+      type: SchemaType.ARRAY,
+      items: {
+        type: SchemaType.OBJECT,
+        properties: {
+          op: {
+            type: SchemaType.STRING,
+            format: "enum",
+            enum: ["addBlock", "updateBlock", "removeBlock"],
+            description: "The edit operation",
+          },
+          blockType: {
+            type: SchemaType.STRING,
+            format: "enum",
+            enum: ["Header", "Subheader", "Body", "List", "Stat", "Quote", "Image"],
+            description: "For addBlock: the kind of block to add",
+          },
+          label: {
+            type: SchemaType.STRING,
+            description: "For addBlock/updateBlock: a short label for the block",
+          },
+          text: {
+            type: SchemaType.STRING,
+            description: "For text blocks: the content. For List use '• ' bullets",
+          },
+          imageRef: {
+            type: SchemaType.STRING,
+            description: "For an Image block: the id of one AVAILABLE uploaded image",
+          },
+          blockId: {
+            type: SchemaType.STRING,
+            description: "For updateBlock/removeBlock: the id of the existing block",
+          },
+        },
+        required: ["op"],
+      },
+    },
+  },
+  required: ["summary", "ops"],
+};
+
+const EDIT_SYSTEM_INSTRUCTION = `You are a presentation content strategist editing ONE content box (a node in an argument graph). You propose concrete, high-quality changes to its content blocks.
+
+THINK FIRST about what THIS slide needs (do not skip this):
+- What is the slide's single point (read its title, kind, and role), and what is missing to make that point land for an audience?
+- Read the EXISTING blocks carefully. NEVER propose content that duplicates or closely echoes a block already on the slide. If asked for "another stat" and a stat already exists, the new one MUST measure a different dimension.
+
+CONTENT QUALITY — this is what matters most:
+- Be specific and concrete. Use precise, vivid, plausible figures and facts, not round generic numbers. Never write filler like "increased significantly" or a vague "40% improvement" with no subject.
+- For Stat blocks, deliberately VARY the dimension you measure across the slide — rotate among: adoption/usage, time saved, cost/$ saved, revenue/growth, error or defect rate, retention/churn, market size, speed/latency, team or customer satisfaction. Do NOT keep proposing the same kind of metric. Give every number a specific label and, in the text, one line of context that makes it credible (who, over what period, vs. what baseline).
+- Pick the block TYPE that best fits the point — a Quote for credibility, a List to break out steps or examples, a Stat for one hard number, a Body for nuance. Do NOT default to Stat every time.
+- Reason about what genuinely strengthens the argument, then make the MINIMUM edits that fulfill the request — but make them distinct and useful, not boilerplate.
+
+OPS:
+- "addBlock": set blockType + label + (text for text blocks, or imageRef for an Image).
+  • Text block types: Header, Subheader, Body, List (use "• " bullets), Stat (a number + short label), Quote.
+  • Image: set imageRef to the id of one of the AVAILABLE uploaded images — never invent an id or URL. Only add an Image if a relevant uploaded image exists.
+- "updateBlock": set blockId (an existing block's id) plus the new text and/or label.
+- "removeBlock": set blockId.
+
+Return a "summary" (one sentence on what you changed AND why it fits this slide) and the "ops" array.
+Return ONLY the JSON object. No prose, no markdown fences.`;
+
+// ── EDIT MODEL SWAP POINT ─────────────────────────────────────────────────────
+// To change the model: update the `model` string below.
+// temperature is raised so repeated requests don't converge on near-identical
+// stats (a higher value widens the distribution of proposed content).
+// NOTE on real research: live web grounding (tools:[{googleSearch:{}}]) can't be
+// combined with a forced responseSchema today — that's a future swap point if the
+// agent needs real-time figures rather than the model's own knowledge.
+export function getEditModel() {
+  return getClient().getGenerativeModel({
+    model: "gemini-2.5-flash",
+    systemInstruction: EDIT_SYSTEM_INSTRUCTION,
+    generationConfig: {
+      responseMimeType: "application/json",
+      responseSchema: EDIT_RESPONSE_SCHEMA,
+      temperature: 1.1,
+    },
+  });
+}

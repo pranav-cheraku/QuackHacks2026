@@ -3,10 +3,8 @@ import {
   Check,
   ChevronDown,
   ChevronRight,
-  Image as ImageIcon,
   LayoutGrid,
   Lock,
-  Plus,
   RotateCcw,
   Send,
   Sparkles,
@@ -23,12 +21,17 @@ import {
 import { AddContent } from "./AddContent";
 import { blockIcon } from "@/lib/content-blocks";
 import type {
+  ComponentType,
   ContentBlock,
   EdgeRelation,
   SceneRole,
   SceneStatus,
   SlideNode,
 } from "@/lib/projektor-data";
+import { editNode } from "@/lib/editApi";
+import { getIntake } from "@/lib/intakeStore";
+import { getThread, setThread, type ChatMessage } from "@/lib/chatStore";
+import type { EditOp } from "@backend/landing-page/editSchema";
 
 type Tab = "chat" | "inspect" | "argument";
 
@@ -43,6 +46,7 @@ interface Props {
   onChangeRelation: (toId: string, r: EdgeRelation) => void;
   onToggleLock: (id: string) => void;
   onAddBlock: (id: string, block: Omit<ContentBlock, "id">) => void;
+  onUpdateBlock: (id: string, blockId: string, patch: { text?: string; label?: string }) => void;
   onRemoveBlock: (id: string, blockId: string) => void;
   onOpenContent: (id: string) => void;
   onAccept: (id: string) => void;
@@ -83,6 +87,7 @@ export function ScenePanel({
   onChangeRelation,
   onToggleLock,
   onAddBlock,
+  onUpdateBlock,
   onRemoveBlock,
   onOpenContent,
   onAccept,
@@ -164,10 +169,19 @@ export function ScenePanel({
 
       {/* Body */}
       {tab === "chat" ? (
-        <ChatTab
-          title={node?.title ?? "your presentation"}
-          selectedCount={selectedCount}
-        />
+        node ? (
+          <ChatTab
+            key={node.id}
+            node={node}
+            onAddBlock={onAddBlock}
+            onUpdateBlock={onUpdateBlock}
+            onRemoveBlock={onRemoveBlock}
+          />
+        ) : (
+          <div className="flex-1 flex items-center justify-center px-6 text-center text-[13px] text-muted-foreground">
+            Select a scene to chat about it.
+          </div>
+        )
       ) : !node ? (
         <div className="flex-1 flex items-center justify-center px-6 text-center text-[13px] text-muted-foreground">
           Select a scene to inspect it.
@@ -436,115 +450,171 @@ function InspectTab({
   );
 }
 
-interface ChatMessage {
-  id: string;
-  role: "user" | "agent";
-  content: string;
+const QUICK_PROMPTS = [
+  "Add a supporting stat",
+  "Tighten the body copy",
+  "Add a relevant image",
+];
+
+const OP_VERB: Record<EditOp["op"], string> = {
+  addBlock: "Add",
+  updateBlock: "Edit",
+  removeBlock: "Remove",
+};
+
+// One-line human description of a proposed op, for the proposal card.
+function opLine(op: EditOp): string {
+  if (op.op === "addBlock") {
+    const what = op.blockType ?? "block";
+    const detail = op.text ? `: ${op.text}` : op.imageRef ? " (uploaded image)" : "";
+    return `${what}${op.label ? ` — ${op.label}` : ""}${detail}`;
+  }
+  if (op.op === "updateBlock") return `${op.blockId ?? ""}${op.text ? `: ${op.text}` : ""}`;
+  return `${op.blockId ?? ""}`;
 }
 
-const AUTO_RESPONSES = [
-  "Based on the current slide structure, I'd suggest reinforcing the key claim with additional supporting evidence on the slide that follows.",
-  "This slide looks strong. Consider tightening the headline to focus on the single most important insight for the audience.",
-  "The argument flow could be improved by moving the data slide before this one to establish context first.",
-  "Nice structure overall. You might want to add a transition statement that bridges this slide's conclusion to the next claim.",
-  "The visual hierarchy could be improved here — try leading with the key stat rather than the body copy to hook the audience faster.",
-];
-let autoIdx = 0;
+// Build a board ContentBlock (minus id) from one agent op. Resolves an Image op's
+// imageRef against the uploaded intake pool; returns null if it can't be resolved.
+function blockFromOp(op: EditOp): Omit<ContentBlock, "id"> | null {
+  const type = op.blockType as ComponentType | undefined;
+  if (!type) return null;
+  const label = op.label ?? type;
+  if (type === "Image") {
+    const img = getIntake().images.find((i) => i.id === op.imageRef);
+    if (!img) return null;
+    return { type, label, src: img.url };
+  }
+  return { type, label, text: op.text ?? "" };
+}
 
-const QUICK_PROMPTS = [
-  "Assess the slide deck flow",
-  "Improve this slide",
-  "Suggest supporting evidence",
-];
+// Reject if a promise doesn't settle within `ms`. This guarantees the chat's
+// "thinking" state always clears — without it, a hung/rate-limited server call
+// never settles, isThinking stays true, and the send guard silently blocks every
+// future message (the chat appears completely dead, with no error).
+function withTimeout<T>(promise: Promise<T>, ms: number): Promise<T> {
+  return Promise.race([
+    promise,
+    new Promise<T>((_, reject) =>
+      setTimeout(() => reject(new Error("[TIMEOUT] The AI took too long to respond.")), ms),
+    ),
+  ]);
+}
 
-interface AttachedImage {
-  file: File;
-  width: number;
-  height: number;
-  objectUrl: string;
+// Turn a raw agent error into a short, honest chat message, so a failure is
+// visible (and its cause clear) instead of hidden behind a fake proposal.
+function friendlyEditError(reason: string): string {
+  if (reason.includes("[GEMINI_KEY_MISSING]"))
+    return "The AI isn't configured — no Gemini API key on the server.";
+  if (
+    reason.includes("[TIMEOUT]") ||
+    reason.includes("[GEMINI_API_ERROR]") ||
+    /429|rate|quota|RESOURCE_EXHAUSTED/i.test(reason)
+  )
+    return "The AI is busy or rate-limited right now — give it a moment and try again.";
+  return "Couldn't reach the AI. Try again in a moment.";
 }
 
 function ChatTab({
-  title,
-  selectedCount,
+  node,
+  onAddBlock,
+  onUpdateBlock,
+  onRemoveBlock,
 }: {
-  title: string;
-  selectedCount: number;
+  node: SlideNode;
+  onAddBlock: (id: string, block: Omit<ContentBlock, "id">) => void;
+  onUpdateBlock: (id: string, blockId: string, patch: { text?: string; label?: string }) => void;
+  onRemoveBlock: (id: string, blockId: string) => void;
 }) {
-  const [messages, setMessages] = useState<ChatMessage[]>([]);
+  // Per-node thread: seed from the session store, persist on every change.
+  const [messages, setMessages] = useState<ChatMessage[]>(() => getThread(node.id));
   const [draft, setDraft] = useState("");
-  const [attachment, setAttachment] = useState<AttachedImage | null>(null);
-  const [isTyping, setIsTyping] = useState(false);
-  const [sending, setSending] = useState(false);
+  const [isThinking, setIsThinking] = useState(false);
   const listRef = useRef<HTMLDivElement>(null);
-  const fileInputRef = useRef<HTMLInputElement>(null);
+
+  useEffect(() => {
+    setThread(node.id, messages);
+  }, [node.id, messages]);
 
   useEffect(() => {
     if (listRef.current)
       listRef.current.scrollTop = listRef.current.scrollHeight;
-  }, [messages]);
+  }, [messages, isThinking]);
 
-  // Revoke object URL when attachment changes to avoid memory leaks
-  useEffect(() => {
-    return () => {
-      if (attachment) URL.revokeObjectURL(attachment.objectUrl);
-    };
-  }, [attachment]);
-
-  const submitText = (text: string) => {
-    const trimmed = text.trim();
-    if (!trimmed && !attachment) return;
-    const content = [
-      attachment
-        ? `[Image: ${attachment.file.name} ${attachment.width}×${attachment.height}]`
-        : "",
-      trimmed,
-    ]
-      .filter(Boolean)
-      .join("\n");
+  // Send an instruction to the edit agent. It returns a proposal (block ops),
+  // appended as an agent message awaiting Accept/Discard. Falls back to a
+  // deterministic mock proposal if the agent is unreachable.
+  const send = async (text: string) => {
+    const instruction = text.trim();
+    if (!instruction || isThinking) return;
     setMessages((prev) => [
       ...prev,
-      { id: `msg-${Date.now()}`, role: "user", content },
+      { id: `m-${Date.now()}`, role: "user", content: instruction },
     ]);
     setDraft("");
-    if (attachment) {
-      URL.revokeObjectURL(attachment.objectUrl);
-      setAttachment(null);
-    }
-    setIsTyping(true);
-    const response = AUTO_RESPONSES[autoIdx % AUTO_RESPONSES.length];
-    autoIdx += 1;
-    setTimeout(() => {
-      setIsTyping(false);
+    setIsThinking(true);
+    try {
+      // Time-box the call so a hung/rate-limited request can never wedge the chat.
+      const res = await withTimeout(
+        editNode({
+          data: {
+            instruction,
+            node: {
+              title: node.title,
+              body: node.body,
+              eyebrow: node.eyebrow,
+              kind: node.kind,
+              blocks: (node.blocks ?? []).map((b) => ({
+                id: b.id,
+                type: b.type,
+                label: b.label,
+                text: b.text,
+              })),
+            },
+            availableImages: getIntake().images.map((i) => ({ id: i.id, name: i.name })),
+          },
+        }),
+        30000,
+      );
       setMessages((prev) => [
         ...prev,
-        { id: `msg-${Date.now()}`, role: "agent", content: response },
+        { id: `m-${Date.now()}`, role: "agent", content: res.summary, proposal: res, proposalStatus: "pending" },
       ]);
-    }, 1400);
+    } catch (err) {
+      const reason = err instanceof Error ? err.message : String(err);
+      console.warn("[ChatTab] edit agent failed:", reason);
+      setMessages((prev) => [
+        ...prev,
+        { id: `m-${Date.now()}`, role: "agent", content: friendlyEditError(reason) },
+      ]);
+    } finally {
+      setIsThinking(false);
+    }
   };
 
-  const submit = () => {
-    if (!draft.trim() && !attachment) return;
-    setSending(true);
-    setTimeout(() => setSending(false), 350);
-    submitText(draft);
-  };
-
-  const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
-    const url = URL.createObjectURL(file);
-    const img = new Image();
-    img.onload = () => {
-      setAttachment({
-        file,
-        width: img.naturalWidth,
-        height: img.naturalHeight,
-        objectUrl: url,
-      });
-    };
-    img.src = url;
-    e.target.value = "";
+  // Accept → apply every op to this node's blocks; Discard → just mark it.
+  // Side effects (onAddBlock/…) run HERE in the event handler — never inside the
+  // setMessages updater, which must stay pure (StrictMode double-invokes updaters,
+  // which would otherwise apply every op twice).
+  const decide = (msgId: string, accept: boolean) => {
+    const msg = messages.find((m) => m.id === msgId);
+    if (!msg || !msg.proposal || msg.proposalStatus !== "pending") return;
+    if (accept) {
+      for (const op of msg.proposal.ops) {
+        if (op.op === "addBlock") {
+          const block = blockFromOp(op);
+          if (block) onAddBlock(node.id, block);
+        } else if (op.op === "updateBlock" && op.blockId) {
+          onUpdateBlock(node.id, op.blockId, { text: op.text, label: op.label });
+        } else if (op.op === "removeBlock" && op.blockId) {
+          onRemoveBlock(node.id, op.blockId);
+        }
+      }
+    }
+    setMessages((prev) =>
+      prev.map((m) =>
+        m.id === msgId ? { ...m, proposalStatus: accept ? "accepted" : "discarded" } : m,
+      ),
+    );
   };
 
   return (
@@ -573,15 +643,15 @@ function ChatTab({
               <Sparkles size={18} />
             </div>
             <p className="text-[13px] text-muted-foreground leading-snug max-w-[200px]">
-              Talk to the AI about &ldquo;{title}&rdquo; and the slides
-              connected to it.
+              Ask the AI to edit the content of &ldquo;{node.title}&rdquo;. It
+              proposes changes you accept or discard.
             </p>
             <div className="flex flex-col gap-2 w-full px-2">
               {QUICK_PROMPTS.map((prompt) => (
                 <button
                   key={prompt}
                   type="button"
-                  onClick={() => submitText(prompt)}
+                  onClick={() => send(prompt)}
                   className="flex items-center gap-2 px-3 py-2 rounded-lg border border-border bg-card text-[12px] text-muted-foreground hover:text-ink hover:bg-canvas/60 transition-colors text-left"
                 >
                   <span className="text-muted-foreground">↪</span>
@@ -609,16 +679,56 @@ function ChatTab({
               ) : (
                 <div
                   key={msg.id}
-                  className="flex"
+                  className="flex flex-col items-start gap-1.5"
                   style={{ animation: "slideUp 0.25s ease-out" }}
                 >
                   <div className="max-w-[85%] bg-card border border-border rounded-xl rounded-tl-sm px-3 py-2.5 text-[12px] leading-snug text-muted-foreground whitespace-pre-wrap">
                     {msg.content}
                   </div>
+                  {msg.proposal && msg.proposal.ops.length > 0 && (
+                    <div className="w-full rounded-xl border border-border bg-canvas/60 p-2.5 space-y-2">
+                      <div className="space-y-1">
+                        {msg.proposal.ops.map((op, i) => (
+                          <div
+                            key={i}
+                            className="flex items-start gap-1.5 text-[11px] text-ink"
+                          >
+                            <span className="font-mono text-[9px] uppercase tracking-wider text-accent shrink-0 pt-0.5">
+                              {OP_VERB[op.op]}
+                            </span>
+                            <span className="flex-1 break-words">{opLine(op)}</span>
+                          </div>
+                        ))}
+                      </div>
+                      {msg.proposalStatus === "pending" ? (
+                        <div className="flex gap-1.5">
+                          <button
+                            type="button"
+                            onClick={() => decide(msg.id, true)}
+                            className="flex-1 py-1.5 rounded-md text-[11px] font-semibold text-white transition-opacity hover:opacity-90"
+                            style={{ background: "var(--accent)" }}
+                          >
+                            Accept
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => decide(msg.id, false)}
+                            className="flex-1 py-1.5 rounded-md text-[11px] font-semibold text-muted-foreground border border-border hover:text-ink transition-colors"
+                          >
+                            Discard
+                          </button>
+                        </div>
+                      ) : (
+                        <div className="text-[10px] font-mono uppercase tracking-wider text-muted-foreground">
+                          {msg.proposalStatus === "accepted" ? "✓ Applied" : "Discarded"}
+                        </div>
+                      )}
+                    </div>
+                  )}
                 </div>
               ),
             )}
-            {isTyping && (
+            {isThinking && (
               <div
                 className="flex"
                 style={{ animation: "slideUp 0.2s ease-out" }}
@@ -641,96 +751,26 @@ function ChatTab({
         )}
       </div>
 
-      {/* Slides context badge */}
-      <div className="px-3 pb-1 shrink-0 flex">
-        <div className="flex items-center gap-1 px-1.5 py-0.5 rounded bg-canvas border border-border text-[10px] text-muted-foreground select-none">
-          <ImageIcon size={10} />
-          {selectedCount} slide{selectedCount !== 1 ? "s" : ""} selected
-        </div>
-      </div>
-
       {/* Input */}
-      <div className="border-t border-border p-2.5 shrink-0 space-y-2">
-        {/* Image attachment preview */}
-        {attachment && (
-          <div className="flex items-center gap-1.5 px-1">
-            <div className="flex items-center gap-1.5 px-2 py-1 rounded-md bg-canvas border border-border text-[11px] text-muted-foreground max-w-full overflow-hidden">
-              <ImageIcon size={11} className="shrink-0 text-accent" />
-              <span className="truncate font-medium text-ink">
-                {attachment.file.name}
-              </span>
-              <span className="shrink-0 text-faint">
-                {attachment.width}×{attachment.height}
-              </span>
-              <button
-                type="button"
-                onClick={() => {
-                  URL.revokeObjectURL(attachment.objectUrl);
-                  setAttachment(null);
-                }}
-                className="ml-0.5 shrink-0 text-muted-foreground hover:text-ink transition-colors"
-              >
-                <X size={11} />
-              </button>
-            </div>
-          </div>
-        )}
-
-        <div className="border border-border rounded-lg px-2 py-2 bg-card flex items-center gap-1.5">
-          {/* + button — opens image upload dropup */}
-
-          <DropdownMenu>
-            <DropdownMenuTrigger asChild>
-              <button
-                type="button"
-                className="w-7 h-7 flex items-center justify-center rounded-md text-muted-foreground hover:text-ink hover:bg-canvas/60 transition-colors shrink-0"
-              >
-                <Plus size={15} />
-              </button>
-            </DropdownMenuTrigger>
-            <DropdownMenuContent
-              side="top"
-              align="start"
-              className="min-w-40 bg-chrome border-border"
-            >
-              <DropdownMenuItem
-                onSelect={() => fileInputRef.current?.click()}
-                className="flex items-center gap-2 text-[13px] cursor-pointer"
-              >
-                <ImageIcon size={13} />
-                Add image
-              </DropdownMenuItem>
-            </DropdownMenuContent>
-          </DropdownMenu>
-
-          <input
-            ref={fileInputRef}
-            type="file"
-            accept="image/*"
-            className="hidden"
-            onChange={handleFileChange}
-          />
-
+      <div className="border-t border-border p-2.5 shrink-0">
+        <div className="border border-border rounded-lg px-3 py-2 bg-card flex items-center gap-1.5">
           <input
             className="flex-1 text-[13px] bg-transparent outline-none placeholder:text-muted-foreground min-w-0"
-            placeholder="Ask about this scene…"
+            placeholder="Ask the AI to edit this box…"
             value={draft}
             onChange={(e) => setDraft(e.target.value)}
             onKeyDown={(e) => {
               if (e.key === "Enter" && !e.shiftKey) {
                 e.preventDefault();
-                submit();
+                send(draft);
               }
             }}
           />
           <button
             type="button"
-            onClick={submit}
+            onClick={() => send(draft)}
             className="w-7 h-7 rounded-full flex items-center justify-center text-white hover:opacity-80 active:scale-90 transition-all shrink-0"
-            style={{
-              background: "var(--accent-teal)",
-              animation: sending ? "sendPop 0.35s ease-out" : undefined,
-            }}
+            style={{ background: "var(--accent-teal)" }}
           >
             <Send size={13} />
           </button>

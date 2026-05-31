@@ -21,6 +21,7 @@ import type { GridPlacement } from "@/lib/grid";
 import { INITIAL_IR_SLIDES } from "@/lib/initial-slides";
 import { SLIDE_CANDIDATES } from "@/lib/slide-candidates";
 import { ZOOM_STEP, zoomBy } from "@/lib/viewport";
+import { generateSlideCandidates } from "@/lib/slideDesignAgent";
 
 // ── Module-level helpers / constants ─────────────────────────────────────────
 function toHex(c?: string): string {
@@ -207,6 +208,34 @@ export function EditorView({
     setSelectedElId(null);
     setEditingElId(null);
     setRailSelectionActive(true);
+
+    // SLIDE-DESIGN AGENT: double-clicking a content bucket → generate layout candidates
+    // from its content (title, body, eyebrow) and populate the Designs panel.
+    // Gemini swap point: replace generateSlideCandidates with a real backend call.
+    // Input:  node.title / node.body / node.eyebrow (box content from chunker)
+    // Output: SlideCandidate[] with root: LayoutNode — wired here, Gemini swap in slideDesignAgent.ts
+    const target = slides.find((s) => s.id === startNodeId);
+    if (target && (!target.candidates || target.candidates.length === 0)) {
+      setRightTab("design"); // open Designs panel so candidates appear immediately
+      generateSlideCandidates(target).then((candidates) => {
+        if (!candidates.length) return;
+        dispatch({
+          type: "commit",
+          updater: (prev) =>
+            prev.map((s) => {
+              if (s.id !== startNodeId) return s;
+              return {
+                ...s,
+                candidates,
+                // Apply first candidate's layout as the active root (picks write back via applyCandidate)
+                root: s.root ?? deepCloneWithNewIds(candidates[0].root),
+                activeDesignId: candidates[0].id,
+                designStatus: "designed" as const,
+              };
+            }),
+        });
+      });
+    }
   }, [startNodeId, slides]);
 
   // ── Helpers ──────────────────────────────────────────────────────────────

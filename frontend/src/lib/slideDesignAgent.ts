@@ -1,88 +1,143 @@
 // ── SLIDE-DESIGN AGENT ────────────────────────────────────────────────────────
-// Swap point (b): bucket double-click → N slide-design candidates.
+// Triggered when the user double-clicks a content bucket in the graph view.
 //
-// Input:  one raw SlideNode (designStatus === "bucket") — headline, body, kind, eyebrow
-// Output: SlideCandidate[] — each candidate is a complete element layout for that scene
+// Input:  one SlideNode (designStatus === "bucket") — title, body, eyebrow, kind
+// Output: SlideCandidate[] — each candidate is a complete LayoutNode tree that
+//         the slide editor can render, edit, and write back to the shared deck.
 //
-// SWAP POINT: replace generateSlideCandidates with a real Gemini call.
-// Pattern mirrors backend/landing-page/ (chunkingAgent.ts + proxyHandler.ts).
-// Real agent contract:
+// SWAP POINT (Gemini): replace mockGenerateCandidates with a real server function.
+// Pattern mirrors backend/landing-page/ (createServerFn + proxyHandler).
+// When ready:
+//   1. Create frontend/src/lib/designCandidatesApi.ts (createServerFn, method POST)
+//   2. Create backend/landing-page/designCandidatesHandler.ts + agent
+//   3. Replace the body of generateSlideCandidates below with the server call
+//
+// Contract (stable — both sides must match):
 //   POST /api/design-candidates
-//   Body: { nodeId: string; headline: string; body?: string; kind: SceneKind; eyebrow?: string }
-//   Response: { candidates: [{ label: string; elements: SlideElement[] }] }
-// Mock is deterministic (no randomness) so previews are stable on re-open.
+//   Body:     { nodeId, headline, body?, kind, eyebrow? }
+//   Response: { candidates: [{ id, label, leaves: LeafNodeSpec[] }] }
+//   Client converts leaves → LayoutNode via buildRoot() below.
 
 import type { SlideNode, SlideCandidate } from "./projektor-data";
-import type { SlideElement } from "./slide-model";
-import { nextId } from "./slide-model";
+import type { LeafNode, LayoutNode } from "./ir";
+import { makeLeafId, emptyRoot } from "./ir";
 
-const TEAL = "oklch(0.54 0.105 192)";
-const INK  = "oklch(0.24 0.009 185)";
+const TEAL  = "oklch(0.54 0.105 192)";
+const INK   = "oklch(0.24 0.009 185)";
 const MUTED = "oklch(0.53 0.011 185)";
 
+// Wraps a flat list of LeafNodes in a StackNode root so EditorView can render it.
+function buildRoot(nodeId: string, suffix: string, leaves: LeafNode[]): LayoutNode {
+  return { ...emptyRoot(`${nodeId}-${suffix}`), children: leaves };
+}
+
+// ── Public API ────────────────────────────────────────────────────────────────
 export async function generateSlideCandidates(node: SlideNode): Promise<SlideCandidate[]> {
-  // SWAP POINT: replace this with a real server function call when the backend agent is ready.
-  // await fetch('/api/design-candidates', { method: 'POST', body: JSON.stringify({ ... }) })
+  // SWAP POINT: uncomment and implement when backend agent is ready.
+  // const result = await designCandidatesApi({ data: {
+  //   nodeId: node.id, headline: node.title, body: node.body,
+  //   kind: node.kind, eyebrow: node.eyebrow,
+  // }});
+  // return result.candidates.map(c => ({
+  //   id: c.id, label: c.label,
+  //   root: buildRoot(node.id, c.id, c.leaves as LeafNode[]),
+  // }));
   return mockGenerateCandidates(node);
 }
 
 // ── Mock: two deterministic layout variants ───────────────────────────────────
+// Stable output (no randomness) so previews don't flicker on re-open.
 function mockGenerateCandidates(node: SlideNode): SlideCandidate[] {
-  const { title: headline, body = "", eyebrow } = node;
+  const { id, title: headline, body = "", eyebrow } = node;
 
-  // Variant A — Left-aligned editorial
-  const leftAligned: SlideElement[] = [
+  // ── Variant A: Left-aligned editorial ────────────────────────────────────
+  const leftLeaves: LeafNode[] = [
     ...(eyebrow ? [{
-      id: nextId(), type: "text" as const, zIndex: 1, opacity: 1, rotation: 0,
+      kind: "leaf" as const, id: makeLeafId(), zIndex: 1, opacity: 1, rotation: 0,
       placement: { col: 500, row: 400, colSpan: 9000, rowSpan: 350 },
-      text: { content: eyebrow, fontSize: 11, fontWeight: 700, fontStyle: "normal" as const,
-        textDecoration: "none" as const, textAlign: "left" as const, color: TEAL,
-        fontFamily: "mono" as const, letterSpacing: "0.25em" },
+      block: {
+        role: "text" as const, text: eyebrow,
+        style: {
+          fontSize: 11, fontWeight: 700, fontStyle: "normal" as const,
+          textDecoration: "none" as const, textAlign: "left" as const,
+          color: TEAL, fontFamily: "mono" as const, letterSpacing: "0.25em",
+        },
+      },
     }] : []),
     {
-      id: nextId(), type: "text", zIndex: 1, opacity: 1, rotation: 0,
+      kind: "leaf", id: makeLeafId(), zIndex: 1, opacity: 1, rotation: 0,
       placement: { col: 500, row: eyebrow ? 900 : 700, colSpan: 9000, rowSpan: 1500 },
-      text: { content: headline, fontSize: 48, fontWeight: 800, fontStyle: "normal",
-        textDecoration: "none", textAlign: "left", color: INK, lineHeight: 1.1 },
+      block: {
+        role: "text", text: headline,
+        style: {
+          fontSize: 48, fontWeight: 800, fontStyle: "normal",
+          textDecoration: "none", textAlign: "left", color: INK, lineHeight: 1.1,
+        },
+      },
     },
     ...(body ? [{
-      id: nextId(), type: "text" as const, zIndex: 1, opacity: 1, rotation: 0,
+      kind: "leaf" as const, id: makeLeafId(), zIndex: 1, opacity: 1, rotation: 0,
       placement: { col: 500, row: eyebrow ? 2600 : 2400, colSpan: 9000, rowSpan: 2700 },
-      text: { content: body, fontSize: 20, fontWeight: 400, fontStyle: "normal" as const,
-        textDecoration: "none" as const, textAlign: "left" as const, color: MUTED, lineHeight: 1.5 },
+      block: {
+        role: "text" as const, text: body,
+        style: {
+          fontSize: 20, fontWeight: 400, fontStyle: "normal" as const,
+          textDecoration: "none" as const, textAlign: "left" as const,
+          color: MUTED, lineHeight: 1.5,
+        },
+      },
     }] : []),
   ];
 
-  // Variant B — Centered with teal rule
-  const centered: SlideElement[] = [
+  // ── Variant B: Centered with teal accent bar ──────────────────────────────
+  const centeredLeaves: LeafNode[] = [
     {
-      id: nextId(), type: "shape", zIndex: 0, opacity: 1, rotation: 0,
+      kind: "leaf", id: makeLeafId(), zIndex: 0, opacity: 1, rotation: 0,
       placement: { col: 4700, row: 300, colSpan: 600, rowSpan: 60 },
-      shape: { fill: TEAL, stroke: "transparent", strokeWidth: 0, borderRadius: 4 },
+      block: {
+        role: "shape",
+        style: { fill: TEAL, stroke: "transparent", strokeWidth: 0, borderRadius: 4 },
+      },
     },
     ...(eyebrow ? [{
-      id: nextId(), type: "text" as const, zIndex: 1, opacity: 1, rotation: 0,
+      kind: "leaf" as const, id: makeLeafId(), zIndex: 1, opacity: 1, rotation: 0,
       placement: { col: 500, row: 500, colSpan: 9000, rowSpan: 350 },
-      text: { content: eyebrow, fontSize: 11, fontWeight: 700, fontStyle: "normal" as const,
-        textDecoration: "none" as const, textAlign: "center" as const, color: TEAL,
-        fontFamily: "mono" as const, letterSpacing: "0.25em" },
+      block: {
+        role: "text" as const, text: eyebrow,
+        style: {
+          fontSize: 11, fontWeight: 700, fontStyle: "normal" as const,
+          textDecoration: "none" as const, textAlign: "center" as const,
+          color: TEAL, fontFamily: "mono" as const, letterSpacing: "0.25em",
+        },
+      },
     }] : []),
     {
-      id: nextId(), type: "text", zIndex: 1, opacity: 1, rotation: 0,
+      kind: "leaf", id: makeLeafId(), zIndex: 1, opacity: 1, rotation: 0,
       placement: { col: 500, row: eyebrow ? 1000 : 800, colSpan: 9000, rowSpan: 1800 },
-      text: { content: headline, fontSize: 52, fontWeight: 800, fontStyle: "normal",
-        textDecoration: "none", textAlign: "center", color: INK, lineHeight: 1.05 },
+      block: {
+        role: "text", text: headline,
+        style: {
+          fontSize: 52, fontWeight: 800, fontStyle: "normal",
+          textDecoration: "none", textAlign: "center", color: INK, lineHeight: 1.05,
+        },
+      },
     },
     ...(body ? [{
-      id: nextId(), type: "text" as const, zIndex: 1, opacity: 1, rotation: 0,
+      kind: "leaf" as const, id: makeLeafId(), zIndex: 1, opacity: 1, rotation: 0,
       placement: { col: 1500, row: eyebrow ? 3000 : 2800, colSpan: 7000, rowSpan: 2200 },
-      text: { content: body, fontSize: 18, fontWeight: 400, fontStyle: "normal" as const,
-        textDecoration: "none" as const, textAlign: "center" as const, color: MUTED, lineHeight: 1.5 },
+      block: {
+        role: "text" as const, text: body,
+        style: {
+          fontSize: 18, fontWeight: 400, fontStyle: "normal" as const,
+          textDecoration: "none" as const, textAlign: "center" as const,
+          color: MUTED, lineHeight: 1.5,
+        },
+      },
     }] : []),
   ];
 
   return [
-    { id: `${node.id}-cand-left`, label: "Left-aligned", elements: leftAligned },
-    { id: `${node.id}-cand-center`, label: "Centered", elements: centered },
+    { id: `${id}-cand-left`,   label: "Left-aligned", root: buildRoot(id, "left",   leftLeaves) },
+    { id: `${id}-cand-center`, label: "Centered",     root: buildRoot(id, "center", centeredLeaves) },
   ];
 }

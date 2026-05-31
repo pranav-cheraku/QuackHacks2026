@@ -1,18 +1,25 @@
-import { useState } from "react";
+// Landing page — brain-dump intake that produces the storyboard graph.
+// What was cut from the old version and why:
+//   • Feature chips (×3 above heading) — pure marketing copy, adds noise before the input
+//   • Description paragraph — redundant with the heading
+//   • Footer with repeat chips + copyright — unnecessary chrome for an intake screen
+//   • Voice recording button — stub, non-functional, distracting
+//   • "Upload image dump" button — collapsed into a single "Attach files" action
+//   • "Brand Identity Extraction" verbose panel label — replaced with a plain URL input
+//   • "Start from a blank board instead" skip link — generation is the only path now
+// What was added:
+//   • Dashboard link in header so the user is never stranded
+//   • Wired file input (.txt .md .pdf and common docs) — text extracted and appended to brain-dump
+
+import { useState, useRef } from "react";
+import { Link } from "@tanstack/react-router";
 import { Logo } from "./Logo";
 import { hydrateToSlides, type TargetDuration, type HydrateResult } from "@/lib/chunker";
-import { Globe, Mic, Paperclip, ImageIcon, ArrowRight, Loader2 } from "lucide-react";
+import { Globe, Paperclip, ArrowRight, Loader2, X, FileText } from "lucide-react";
 
 interface Props {
   onGenerate: (result: HydrateResult) => void;
-  onSkip: () => void;
 }
-
-const FEATURE_CHIPS = [
-  { icon: "⌘", label: "Looks great by construction" },
-  { icon: "✎", label: "Edits the argument, not just pixels" },
-  { icon: "→", label: "One source → slides, mobile, PDF" },
-];
 
 const DURATION_OPTIONS: { value: TargetDuration; label: string }[] = [
   { value: 5, label: "5 min" },
@@ -20,28 +27,92 @@ const DURATION_OPTIONS: { value: TargetDuration; label: string }[] = [
   { value: 20, label: "20 min" },
 ];
 
-export function LandingPage({ onGenerate, onSkip }: Props) {
+// ── File text extraction ──────────────────────────────────────────────────────
+// Supported: .txt .md .csv .json (via File.text())
+// PDF: extract printable ASCII from binary — works for text-based PDFs,
+//      not scanned/image PDFs. For richer extraction, integrate pdfjs-dist
+//      or send the PDF to Gemini via the Files API in a future version.
+async function extractFileText(file: File): Promise<string> {
+  const name = file.name.toLowerCase();
+  const isText =
+    file.type.startsWith("text/") ||
+    name.endsWith(".md") ||
+    name.endsWith(".txt") ||
+    name.endsWith(".csv") ||
+    name.endsWith(".json");
+
+  if (isText) {
+    const content = await file.text();
+    return `--- ${file.name} ---\n${content}`;
+  }
+
+  if (name.endsWith(".pdf") || file.type === "application/pdf") {
+    // Attempt ASCII text extraction from PDF binary.
+    // Limitation: garbled output for scanned/image PDFs.
+    const buf = await file.arrayBuffer();
+    const raw = new TextDecoder("latin1").decode(new Uint8Array(buf));
+    // Pull out printable sequences, collapse whitespace
+    const extracted = raw
+      .replace(/[^\x20-\x7E\n\r\t]/g, " ")
+      .replace(/\s{3,}/g, "\n")
+      .trim()
+      .slice(0, 8000);
+    return `--- ${file.name} (PDF — text extraction, may be incomplete) ---\n${extracted}`;
+  }
+
+  // Generic fallback — try as text
+  try {
+    const content = await file.text();
+    return `--- ${file.name} ---\n${content.slice(0, 8000)}`;
+  } catch {
+    return `--- ${file.name}: could not read. Describe its content in the text area. ---`;
+  }
+}
+
+export function LandingPage({ onGenerate }: Props) {
   const [text, setText] = useState("");
   const [brandUrl, setBrandUrl] = useState("");
   const [duration, setDuration] = useState<TargetDuration>(10);
   const [isGenerating, setIsGenerating] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [usedMock, setUsedMock] = useState(false);
+  const [attachedFiles, setAttachedFiles] = useState<File[]>([]);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+
+  const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const files = e.target.files;
+    if (!files || files.length === 0) return;
+    const newFiles = Array.from(files);
+    setAttachedFiles((prev) => [...prev, ...newFiles]);
+    // Extract text and append to the brain-dump textarea
+    const texts = await Promise.all(newFiles.map(extractFileText));
+    setText((prev) => (prev ? `${prev}\n\n${texts.join("\n\n")}` : texts.join("\n\n")));
+    // Reset the input so the same file can be re-attached if needed
+    e.target.value = "";
+  };
+
+  const removeFile = (idx: number) => {
+    setAttachedFiles((prev) => prev.filter((_, i) => i !== idx));
+  };
 
   const handleGenerate = async () => {
     if (!text.trim()) {
-      setError("Add some content to the brain-dump first.");
+      setError("Add some content first — paste notes, a rough outline, or attach a doc.");
       return;
     }
     setError(null);
     setUsedMock(false);
     setIsGenerating(true);
     try {
-      const result = await hydrateToSlides(text.trim(), duration);
+      // Prepend brand URL as context if provided (not yet used by Gemini agent
+      // for palette extraction — future brand-identity-agent swap point)
+      const fullText = brandUrl.trim()
+        ? `Brand / company URL: ${brandUrl.trim()}\n\n${text.trim()}`
+        : text.trim();
+      const result = await hydrateToSlides(fullText, duration);
       if (result.source === "mock") setUsedMock(true);
       onGenerate(result);
     } catch (err) {
-      // Map staged error labels to readable UI messages
       const msg = err instanceof Error ? err.message : "Something went wrong. Try again.";
       if (msg.includes("[GEMINI_KEY_MISSING]"))
         setError("Gemini key not found — add GEMINI_API_KEY to frontend/.env and restart.");
@@ -58,7 +129,7 @@ export function LandingPage({ onGenerate, onSkip }: Props) {
 
   return (
     <div className="min-h-screen flex flex-col" style={{ background: "#edf0f8" }}>
-      {/* ── Background grid ── */}
+      {/* Background grid */}
       <div
         className="fixed inset-0 pointer-events-none"
         style={{
@@ -68,54 +139,31 @@ export function LandingPage({ onGenerate, onSkip }: Props) {
         }}
       />
 
-      {/* ── Top bar ── */}
+      {/* Header */}
       <header className="relative z-10 h-14 flex items-center justify-between px-5 bg-white/60 backdrop-blur-sm border-b border-border/60">
         <div className="flex items-center gap-2">
           <Logo />
           <span className="font-semibold text-[15px] text-ink">Projektor</span>
         </div>
-        <div className="flex items-center gap-2">
-          <button className="w-8 h-8 rounded-full flex items-center justify-center text-muted-foreground hover:bg-canvas/60 transition-colors">
-            <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
-              <path d="M8 1.5A4.5 4.5 0 0 0 3.5 6c0 2.21-.9 3.41-1.72 4.1-.27.23-.28.63-.03.89.14.15.34.24.55.24H13.7c.21 0 .41-.09.55-.24.25-.26.24-.66-.03-.89C13.4 9.41 12.5 8.21 12.5 6A4.5 4.5 0 0 0 8 1.5ZM8 15a2 2 0 0 0 1.73-1H6.27A2 2 0 0 0 8 15Z" fill="currentColor"/>
-            </svg>
-          </button>
-          <div className="w-8 h-8 rounded-full bg-[oklch(0.55_0.1_250)] flex items-center justify-center text-[11px] font-bold text-white">
-            Z
-          </div>
-        </div>
+        <Link
+          to="/dashboard"
+          className="text-[13px] text-muted-foreground hover:text-ink transition-colors px-3 py-1.5 rounded-lg hover:bg-canvas/60"
+        >
+          Dashboard
+        </Link>
       </header>
 
-      {/* ── Main content ── */}
+      {/* Main */}
       <main className="relative z-10 flex-1 flex flex-col items-center justify-center px-4 py-12">
-        {/* Feature chips */}
-        <div className="flex flex-wrap items-center justify-center gap-2 mb-8">
-          {FEATURE_CHIPS.map((chip) => (
-            <div
-              key={chip.label}
-              className="flex items-center gap-1.5 px-3 py-1.5 rounded-full border border-border bg-white/70 text-[12px] font-medium text-ink"
-            >
-              <span className="text-[13px] text-muted-foreground font-mono">{chip.icon}</span>
-              {chip.label}
-            </div>
-          ))}
-        </div>
-
-        {/* Heading */}
-        <h1 className="font-serif text-[44px] sm:text-[52px] font-bold text-ink text-center leading-[1.05] max-w-[620px] mb-3">
+        <h1 className="font-serif text-[44px] sm:text-[52px] font-bold text-ink text-center leading-[1.05] max-w-[620px] mb-8">
           Author the argument.
           <br />
           We'll build the deck.
         </h1>
-        <p className="text-center text-muted-foreground text-[15px] max-w-[480px] leading-relaxed mb-8">
-          Drop in your thinking and a brand. Projektor structures it into a
-          presentation — design, layout, and flow handled for you.
-        </p>
 
-        {/* Input card */}
-        <div className="w-full max-w-[640px]">
+        <div className="w-full max-w-[640px] space-y-3">
+          {/* Brain-dump textarea card */}
           <div className="bg-white rounded-2xl border border-border shadow-[0_2px_24px_-4px_rgba(0,0,0,0.08)] overflow-hidden">
-            {/* Textarea */}
             <textarea
               value={text}
               onChange={(e) => {
@@ -124,138 +172,124 @@ export function LandingPage({ onGenerate, onSkip }: Props) {
               }}
               placeholder="Paste notes, ramble your pitch, or drop a rough outline. Don't worry about structure — that's our job."
               className="w-full px-5 pt-4 pb-3 text-[14px] leading-relaxed text-ink placeholder:text-muted-foreground bg-transparent resize-none outline-none font-sans"
-              style={{ minHeight: 210 }}
+              style={{ minHeight: 200 }}
             />
 
-            {/* Action row */}
-            <div className="border-t border-border px-4 py-3 flex items-center gap-1.5">
-              {[
-                { icon: Mic, label: "Record a voice brain-dump" },
-                { icon: Paperclip, label: "Attach docs / dataset" },
-                { icon: ImageIcon, label: "Upload image dump" },
-              ].map(({ icon: Icon, label }) => (
-                <button
-                  key={label}
-                  type="button"
-                  className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-[12px] text-muted-foreground hover:text-ink hover:bg-canvas/60 transition-colors"
-                >
-                  <Icon size={13} />
-                  {label}
-                </button>
-              ))}
+            {/* Attached file chips */}
+            {attachedFiles.length > 0 && (
+              <div className="px-4 pb-2 flex flex-wrap gap-1.5">
+                {attachedFiles.map((f, i) => (
+                  <span
+                    key={i}
+                    className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-canvas border border-border text-[11px] text-muted-foreground"
+                  >
+                    <FileText size={10} />
+                    {f.name}
+                    <button
+                      type="button"
+                      onClick={() => removeFile(i)}
+                      className="hover:text-ink transition-colors"
+                    >
+                      <X size={10} />
+                    </button>
+                  </span>
+                ))}
+              </div>
+            )}
+
+            {/* Attach files row */}
+            <div className="border-t border-border px-4 py-2.5 flex items-center">
+              <input
+                ref={fileInputRef}
+                type="file"
+                multiple
+                accept=".txt,.md,.pdf,.csv,.json,.docx"
+                className="hidden"
+                onChange={handleFileChange}
+              />
+              <button
+                type="button"
+                onClick={() => fileInputRef.current?.click()}
+                className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-[12px] text-muted-foreground hover:text-ink hover:bg-canvas/60 transition-colors"
+              >
+                <Paperclip size={13} />
+                Attach docs or PDFs
+              </button>
+              <span className="ml-2 text-[11px] text-muted-foreground/60">
+                .txt .md .pdf .docx — text extracted automatically
+              </span>
             </div>
           </div>
 
-          {/* Controls panel — brand + duration + generate */}
-          <div className="mt-3 flex items-stretch gap-3">
-            {/* Brand URL */}
-            <div className="flex-1 bg-white rounded-xl border border-border shadow-[0_2px_8px_-2px_rgba(0,0,0,0.05)] px-4 py-3.5">
-              <div className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wider mb-2.5">
-                Brand Identity Extraction
-              </div>
-              <div className="flex items-center gap-2">
-                <Globe size={14} className="text-muted-foreground shrink-0" />
-                <input
-                  type="url"
-                  value={brandUrl}
-                  onChange={(e) => setBrandUrl(e.target.value)}
-                  placeholder="Paste a company URL"
-                  className="flex-1 text-[13px] text-ink placeholder:text-muted-foreground bg-transparent outline-none"
-                />
-              </div>
-              <p className="text-[11px] text-muted-foreground mt-2">
-                We'll extract your palette + fonts.
-              </p>
+          {/* Controls row: brand URL + duration + generate */}
+          <div className="flex items-stretch gap-3">
+            {/* Brand URL — context hint for future brand agent */}
+            <div className="flex-1 bg-white rounded-xl border border-border shadow-[0_2px_8px_-2px_rgba(0,0,0,0.05)] px-4 py-3 flex items-center gap-2">
+              <Globe size={14} className="text-muted-foreground shrink-0" />
+              <input
+                type="url"
+                value={brandUrl}
+                onChange={(e) => setBrandUrl(e.target.value)}
+                placeholder="Brand URL (optional)"
+                className="flex-1 text-[13px] text-ink placeholder:text-muted-foreground bg-transparent outline-none"
+              />
             </div>
 
             {/* Duration + Generate */}
-            <div className="bg-white rounded-xl border border-border shadow-[0_2px_8px_-2px_rgba(0,0,0,0.05)] px-4 py-3.5 flex flex-col justify-between min-w-[280px]">
-              <div className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wider mb-2.5">
-                Target Duration
+            <div className="bg-white rounded-xl border border-border shadow-[0_2px_8px_-2px_rgba(0,0,0,0.05)] px-4 py-3 flex items-center gap-2 shrink-0">
+              <div className="flex rounded-lg border border-border overflow-hidden text-[12px] font-medium">
+                {DURATION_OPTIONS.map(({ value, label }) => (
+                  <button
+                    key={value}
+                    type="button"
+                    onClick={() => setDuration(value)}
+                    className={`px-3 py-1.5 transition-colors ${
+                      duration === value
+                        ? "bg-ink text-white"
+                        : "text-muted-foreground hover:text-ink hover:bg-canvas/40"
+                    }`}
+                  >
+                    {label}
+                  </button>
+                ))}
               </div>
-              <div className="flex items-center gap-2">
-                {/* Segmented toggle */}
-                <div className="flex rounded-lg border border-border overflow-hidden text-[12px] font-medium">
-                  {DURATION_OPTIONS.map(({ value, label }) => (
-                    <button
-                      key={value}
-                      type="button"
-                      onClick={() => setDuration(value)}
-                      className={`px-4 py-1.5 transition-colors ${
-                        duration === value
-                          ? "bg-ink text-white"
-                          : "text-muted-foreground hover:text-ink hover:bg-canvas/40"
-                      }`}
-                    >
-                      {label}
-                    </button>
-                  ))}
-                </div>
-
-                {/* Generate button */}
-                <button
-                  type="button"
-                  onClick={handleGenerate}
-                  disabled={isGenerating}
-                  className="ml-auto flex items-center gap-2 px-5 py-2.5 rounded-xl text-[13px] font-semibold text-white transition-all hover:opacity-90 active:scale-[0.97] disabled:opacity-70 disabled:cursor-not-allowed"
-                  style={{ background: "var(--accent)" }}
-                >
-                  {isGenerating ? (
-                    <>
-                      <Loader2 size={14} className="animate-spin" />
-                      Generating…
-                    </>
-                  ) : (
-                    <>
-                      Generate deck
-                      <ArrowRight size={14} />
-                    </>
-                  )}
-                </button>
-              </div>
+              <button
+                type="button"
+                onClick={handleGenerate}
+                disabled={isGenerating}
+                className="ml-2 flex items-center gap-2 px-5 py-2 rounded-xl text-[13px] font-semibold text-white transition-all hover:opacity-90 active:scale-[0.97] disabled:opacity-70 disabled:cursor-not-allowed"
+                style={{ background: "var(--accent)" }}
+              >
+                {isGenerating ? (
+                  <>
+                    <Loader2 size={14} className="animate-spin" />
+                    Building storyboard…
+                  </>
+                ) : (
+                  <>
+                    Generate deck
+                    <ArrowRight size={14} />
+                  </>
+                )}
+              </button>
             </div>
           </div>
 
           {/* Error */}
           {error && (
-            <div className="mt-3 px-4 py-2.5 rounded-xl bg-red-50 border border-red-200 text-[12px] text-red-600">
+            <div className="px-4 py-2.5 rounded-xl bg-red-50 border border-red-200 text-[12px] text-red-600">
               {error}
             </div>
           )}
 
-          {/* Mock-mode notice — shown after generate when Gemini was unreachable */}
+          {/* Mock-mode notice */}
           {usedMock && !error && (
-            <div className="mt-3 px-4 py-2.5 rounded-xl bg-amber-50 border border-amber-200 text-[12px] text-amber-700">
-              ⚠ Gemini was unreachable — deck built with mock generation. Check your key and restart the dev server.
+            <div className="px-4 py-2.5 rounded-xl bg-amber-50 border border-amber-200 text-[12px] text-amber-700">
+              ⚠ Gemini was unreachable — storyboard built with mock generation. Check your key and restart the dev server.
             </div>
           )}
-
-          {/* Skip link */}
-          <div className="mt-5 text-center">
-            <button
-              type="button"
-              onClick={onSkip}
-              className="text-[13px] text-muted-foreground hover:text-ink transition-colors underline-offset-2 hover:underline"
-            >
-              Start from a blank board instead
-            </button>
-          </div>
         </div>
       </main>
-
-      {/* ── Footer ── */}
-      <footer className="relative z-10 border-t border-border/60 bg-white/40 backdrop-blur-sm">
-        <div className="max-w-5xl mx-auto px-5 py-3 flex items-center justify-between text-[11px] text-muted-foreground">
-          <div className="flex items-center gap-5">
-            {FEATURE_CHIPS.map((c) => (
-              <span key={c.label} className="flex items-center gap-1">
-                <span className="font-mono">{c.icon}</span> {c.label}
-              </span>
-            ))}
-          </div>
-          <span>© 2026 Projektor. Built with Agentic Intelligence.</span>
-        </div>
-      </footer>
     </div>
   );
 }

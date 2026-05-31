@@ -5,9 +5,14 @@ import { BoardView } from "@/components/projektor/BoardView";
 import { EditorView } from "@/components/projektor/EditorView";
 import { LandingPage } from "@/components/projektor/LandingPage";
 import { INITIAL_NODES, INITIAL_EDGES, type SlideNode, type Edge } from "@/lib/projektor-data";
+import { createDeck, getDeck } from "@/lib/deckStore";
 import type { HydrateResult } from "@/lib/chunker";
 
+// ── Route search params: ?deckId=xxx loads a specific deck from the session store
 export const Route = createFileRoute("/")({
+  validateSearch: (search: Record<string, unknown>) => ({
+    deckId: typeof search.deckId === "string" ? search.deckId : undefined,
+  }),
   head: () => ({
     meta: [
       { title: "Projektor — Board + Editor" },
@@ -22,19 +27,27 @@ export const Route = createFileRoute("/")({
 });
 
 function Projektor() {
-  // phase starts at "landing" on every mount — fresh on each navigation to /.
-  // Direct / loads also show landing; "Start from a blank board" skips it.
-  const [phase, setPhase] = useState<"landing" | "app">("landing");
-  const [deck, setDeck] = useState<SlideNode[]>(INITIAL_NODES);
-  const [deckEdges, setDeckEdges] = useState<Edge[]>(INITIAL_EDGES);
-  const [mode, setMode] = useState<"board" | "editor">("editor");
+  const { deckId } = Route.useSearch();
+
+  // If a deckId is in the URL, load that deck directly (skip landing phase).
+  // Otherwise start at landing so every fresh / shows the intake screen.
+  const savedDeck = deckId ? getDeck(deckId) : undefined;
+
+  const [phase, setPhase] = useState<"landing" | "app">(
+    savedDeck ? "app" : "landing",
+  );
+  const [deck, setDeck] = useState<SlideNode[]>(savedDeck?.nodes ?? INITIAL_NODES);
+  const [deckEdges, setDeckEdges] = useState<Edge[]>(savedDeck?.edges ?? INITIAL_EDGES);
+  const [mode, setMode] = useState<"board" | "editor">(savedDeck ? "board" : "editor");
   const [zoom, setZoom] = useState(0.85);
   const [editorStart, setEditorStart] = useState<string | null>(null);
 
   // GRAPH VIEW ENTRY POINT: generate output lands on the graph (board mode), NOT the editor.
   // Buckets populate the graph as structural argument nodes; slide design happens
   // lazily per-bucket (double-click → slide-design agent → candidate picker).
+  // Each call creates a new deck entry in the session store (multi-deck support).
   const handleGenerate = ({ nodes, edges }: HydrateResult) => {
+    createDeck(nodes, edges); // saves to session store; dashboard will list it
     setDeck(nodes);
     setDeckEdges(edges);
     setEditorStart(null);
@@ -42,12 +55,8 @@ function Projektor() {
     setPhase("app");
   };
 
-  const handleSkip = () => {
-    setPhase("app");
-  };
-
   if (phase === "landing") {
-    return <LandingPage onGenerate={handleGenerate} onSkip={handleSkip} />;
+    return <LandingPage onGenerate={handleGenerate} />;
   }
 
   return (

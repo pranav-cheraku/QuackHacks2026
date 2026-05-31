@@ -100,48 +100,89 @@ function mockChunkIntoScenes(text: string, targetCount: number): ChunkResult[] {
 }
 
 // ── Bucket hydration ──────────────────────────────────────────────────────────
-// Maps ChunkResult[] → raw bucket nodes + sequence edges.
-// Buckets carry the structural content (headline, body, kind, eyebrow) but NO
-// slide design yet. elements[] stays empty — it is populated lazily when the
-// user double-clicks a bucket and the slide-design agent runs (see slideDesignAgent.ts).
-// Board position: 4-column grid, left-to-right then top-to-bottom.
+// Maps ChunkResult[] → raw bucket nodes + narrative edges.
+//
+// Graph structure:
+//   • Title bucket   — top-center, the argument's entry point
+//   • Storyboard buckets — grid of rows below the title, left-to-right narrative flow
+//   • Edges: title → first storyboard (main entry), then sequence between storyboards
+//
+// IMPORTANT: these are INFO BUCKETS, not slides. elements[] is empty.
+// Slide design happens lazily on double-click via the slide-design agent
+// (see slideDesignAgent.ts — SLIDE-DESIGN AGENT SWAP POINT).
 function buildSlideNodes(chunks: ChunkResult[]): Pick<HydrateResult, "nodes" | "edges"> {
   const COLS_PER_ROW = 4;
   const COL_W = 360;
+  const COL_GAP = 40;
   const ROW_H = 240;
+  const ROW_GAP = 60;
+  const ts = Date.now();
 
-  const nodes: SlideNode[] = chunks.map((chunk, i) => {
-    const col = i % COLS_PER_ROW;
-    const row = Math.floor(i / COLS_PER_ROW);
-    return {
-      id: `gen-${Date.now()}-${i}`,
-      index: i + 1,
-      title: chunk.headline,
-      kind: chunk.kind as SceneKind,
-      status: "draft" as SceneStatus,
-      eyebrow: chunk.eyebrow,
-      body: chunk.body,
-      x: 80 + col * (COL_W + 40),
-      y: 80 + row * (ROW_H + 60),
-      width: COL_W,
-      height: ROW_H,
-      state: "rendered" as SlideState,
-      // Raw bucket: no slide design exists yet.
-      // elements[] populated by slide-design agent on double-click (see slideDesignAgent.ts).
-      designStatus: "bucket" as DesignStatus,
-      elements: [],
-      candidates: [],
-      activeDesignId: null,
-    };
-  });
+  const bucketBase = {
+    width: COL_W,
+    height: ROW_H,
+    state: "rendered" as SlideState,
+    designStatus: "bucket" as DesignStatus,
+    elements: [],
+    candidates: [],
+    activeDesignId: null as null,
+  };
 
-  // Sequence edges: narrative flows left-to-right through the argument.
-  // These are the default connections; user can rewire them in the graph.
-  const edges: Edge[] = nodes.slice(0, -1).map((n, i) => ({
-    from: n.id,
-    to: nodes[i + 1].id,
-    relation: "sequence" as EdgeRelation,
+  // Separate title bucket (first kind="title" chunk) from storyboard chunks.
+  // If Gemini doesn't produce a title chunk, synthesize one from the first chunk.
+  const titleIdx = chunks.findIndex((c) => c.kind === "title");
+  const titleChunk: ChunkResult =
+    titleIdx >= 0
+      ? chunks[titleIdx]
+      : { headline: chunks[0]?.headline ?? "Untitled", body: chunks[0]?.body ?? "", kind: "title" };
+  const storyChunks = titleIdx >= 0
+    ? chunks.filter((_, i) => i !== titleIdx)
+    : chunks.slice(1);
+
+  // Title node — centered above the storyboard grid
+  const gridWidth = COLS_PER_ROW * COL_W + (COLS_PER_ROW - 1) * COL_GAP;
+  const titleX = 80 + gridWidth / 2 - COL_W / 2;
+  const titleNode: SlideNode = {
+    id: `gen-title-${ts}`,
+    index: 1,
+    title: titleChunk.headline,
+    kind: "title" as SceneKind,
+    status: "draft" as SceneStatus,
+    eyebrow: titleChunk.eyebrow,
+    body: titleChunk.body,
+    x: titleX,
+    y: 50,
+    ...bucketBase,
+  };
+
+  // Storyboard nodes — 4-column grid, two rows below the title node
+  const STORY_Y = 50 + ROW_H + ROW_GAP * 2;
+  const storyNodes: SlideNode[] = storyChunks.map((chunk, i) => ({
+    id: `gen-${ts}-${i}`,
+    index: i + 2,
+    title: chunk.headline,
+    kind: chunk.kind as SceneKind,
+    status: "draft" as SceneStatus,
+    eyebrow: chunk.eyebrow,
+    body: chunk.body,
+    x: 80 + (i % COLS_PER_ROW) * (COL_W + COL_GAP),
+    y: STORY_Y + Math.floor(i / COLS_PER_ROW) * (ROW_H + ROW_GAP),
+    ...bucketBase,
   }));
+
+  const nodes = [titleNode, ...storyNodes];
+
+  // Edges: title → first storyboard node (entry), then sequence through narrative
+  const edges: Edge[] = [
+    ...(storyNodes.length > 0
+      ? [{ from: titleNode.id, to: storyNodes[0].id, relation: "sequence" as EdgeRelation }]
+      : []),
+    ...storyNodes.slice(0, -1).map((n, i) => ({
+      from: n.id,
+      to: storyNodes[i + 1].id,
+      relation: "sequence" as EdgeRelation,
+    })),
+  ];
 
   return { nodes, edges };
 }

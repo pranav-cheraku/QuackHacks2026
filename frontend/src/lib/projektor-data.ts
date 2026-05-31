@@ -70,6 +70,11 @@ export interface SlideNode {
   role?: SceneRole;
   locked?: boolean;
   blocks?: ContentBlock[];
+  // Ghost (AI-suggested branch) fields. A ghost is a proposed-but-uncommitted
+  // scene: Accept promotes it; Discard sets `discarded` (dimmed but revisitable).
+  ghost?: boolean;
+  discarded?: boolean;
+  rationale?: string;
   // legacy — Slides View only
   state: SlideState;
   thumb: "title" | "stats" | "chart" | "list" | "closing";

@@ -197,7 +197,12 @@ export function EditorView({ startNodeId }: Props) {
         <ToolBtn title="Undo (Ctrl+Z)" dimmed={!canUndo} onClick={undo}><Undo2 size={13} /></ToolBtn>
         <ToolBtn title="Redo (Ctrl+Y)" dimmed={!canRedo} onClick={redo}><Redo2 size={13} /></ToolBtn>
         <Sep />
-        <Select label={selectedEl?.text ? `${selectedEl.text.fontSize}px` : "Size"} />
+        <FontSizeControl
+          value={selectedEl?.text?.fontSize}
+          onChange={(size) =>
+            selectedEl && updateEl(selectedEl.id, (e) => ({ ...e, text: { ...e.text!, fontSize: size } }))
+          }
+        />
         <Sep />
         <ToolBtn
           active={selectedEl?.text?.fontWeight === 700}
@@ -940,11 +945,82 @@ function ToolBtn({ children, title, active, dimmed, onClick }: {
   );
 }
 function Sep() { return <div className="w-px h-5 bg-border mx-1 shrink-0" />; }
-function Select({ label }: { label: string }) {
+const FONT_SIZE_PRESETS = [8, 10, 11, 12, 14, 16, 18, 20, 24, 28, 32, 36, 40, 48, 60, 72, 96];
+
+function FontSizeControl({ value, onChange }: { value: number | undefined; onChange: (n: number) => void }) {
+  const [open, setOpen] = useState(false);
+  const [draft, setDraft] = useState(value?.toString() ?? "");
+  const containerRef = useRef<HTMLDivElement>(null);
+
+  // Keep draft in sync when selection changes
+  useEffect(() => { setDraft(value?.toString() ?? ""); }, [value]);
+
+  // Close on outside click
+  useEffect(() => {
+    if (!open) return;
+    const handler = (e: MouseEvent) => {
+      if (containerRef.current && !containerRef.current.contains(e.target as Node)) setOpen(false);
+    };
+    document.addEventListener("mousedown", handler);
+    return () => document.removeEventListener("mousedown", handler);
+  }, [open]);
+
+  const commit = (raw: string) => {
+    const n = parseInt(raw, 10);
+    if (Number.isFinite(n) && n >= 1 && n <= 400) onChange(n);
+    else setDraft(value?.toString() ?? "");
+  };
+
+  const disabled = value === undefined;
+
   return (
-    <button className="flex items-center gap-1 px-2 h-7 text-[11px] border border-border rounded hover:bg-canvas/40 transition-colors">
-      {label} <ChevronDown size={11} />
-    </button>
+    <div ref={containerRef} className="relative">
+      <div className={`flex items-center border rounded h-7 overflow-visible ${disabled ? "border-border opacity-40" : "border-border"}`}>
+        <input
+          type="text"
+          value={draft}
+          placeholder="—"
+          disabled={disabled}
+          onChange={(e) => setDraft(e.target.value)}
+          onFocus={() => !disabled && setOpen(true)}
+          onBlur={(e) => { commit(e.target.value); setOpen(false); }}
+          onKeyDown={(e) => {
+            e.stopPropagation(); // prevent Delete from removing the element
+            if (e.key === "Enter") { commit((e.target as HTMLInputElement).value); (e.target as HTMLInputElement).blur(); }
+            if (e.key === "Escape") { setDraft(value?.toString() ?? ""); setOpen(false); (e.target as HTMLInputElement).blur(); }
+          }}
+          className="w-9 px-1 text-[11px] font-mono text-center bg-transparent outline-none text-ink placeholder:text-muted-foreground"
+        />
+        <button
+          disabled={disabled}
+          onMouseDown={(e) => { e.preventDefault(); if (!disabled) setOpen((v) => !v); }}
+          className="px-1 h-full border-l border-border flex items-center text-muted-foreground hover:text-ink hover:bg-canvas/40 transition-colors"
+        >
+          <ChevronDown size={10} />
+        </button>
+      </div>
+      {open && (
+        <div className="absolute top-full left-0 mt-1 bg-card border border-border rounded shadow-lg z-[100] py-1 w-16 max-h-56 overflow-y-auto">
+          {FONT_SIZE_PRESETS.map((size) => (
+            <button
+              key={size}
+              onMouseDown={(e) => {
+                e.preventDefault();
+                onChange(size);
+                setDraft(size.toString());
+                setOpen(false);
+              }}
+              className={`w-full text-left px-3 py-0.5 text-[11px] font-mono hover:bg-canvas/60 transition-colors ${
+                value === size ? "font-bold" : "text-ink"
+              }`}
+              style={value === size ? { color: "var(--accent-teal)" } : undefined}
+            >
+              {size}
+            </button>
+          ))}
+        </div>
+      )}
+    </div>
   );
 }
 function Section({ label, children }: { label: string; children: React.ReactNode }) {

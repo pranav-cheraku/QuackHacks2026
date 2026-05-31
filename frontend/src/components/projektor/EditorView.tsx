@@ -795,18 +795,30 @@ function AgentPanel() {
     setMessages((prev) => [...prev, { id: `msg-${Date.now()}`, role: "user", content: text }]);
     setDraft("");
 
-    // INTAKE: forward `text` + current slide IR to Gemini Flash.
-    //   agent.intake(text, slides) → yields SlideNode[] patches → dispatch({ type: "commit", updater })
-    //   Each mutation appends an agent-role message (checklist item) via setMessages.
-
-    // SELF-CRITIQUE: after the render loop completes, diff expected vs. rendered output.
-    //   Failures / warnings → agent messages with scene refs and suggested fixes.
-
-    // ARGUMENT INTELLIGENCE: Gemini Pro scans argument quality across all scenes.
-    //   Unsupported claims / pacing issues → clickable agent messages linking to scene + Argument tab.
-
-    // AGENT RESPONSE: append any agent reply here:
-    //   setMessages((prev) => [...prev, { id: `msg-${Date.now()}`, role: "agent", content: reply }]);
+    // ── AGENT ROLE ────────────────────────────────────────────────────────────
+    // This agent proposes slide edits (IR mutations), not just chat replies.
+    // It reads the current slides IR + the user's message and returns structured
+    // proposals — add/remove/restructure scenes, swap layouts, edit content,
+    // place images. Proposals surface here for user review; they are NEVER
+    // auto-applied. The user explicitly accepts or discards each one.
+    // This mirrors the ghost-node accept/discard pattern used on the board.
+    //
+    // ── PROPOSAL FLOW ─────────────────────────────────────────────────────────
+    // 1. INTAKE: call Gemini Flash with (text, slides) → returns ProposedMutations[].
+    //    Append an agent message carrying the proposal object (not just a string).
+    //    The PROPOSAL RENDER POINT above surfaces Accept / Discard affordances.
+    //    On Accept  → dispatch({ type: "commit", updater: applyMutations(proposal) })
+    //    On Discard → mark proposal dropped; bubble stays as plain chat message.
+    //
+    // 2. SELF-CRITIQUE: after the render loop applies mutations, diff expected vs.
+    //    rendered output. Failures / imbalance → agent messages with scene refs.
+    //
+    // 3. ARGUMENT INTELLIGENCE: Gemini Pro scans argument quality across all scenes.
+    //    Unsupported claims / pacing issues → agent messages linking to the scene
+    //    and the Argument tab.
+    //
+    // 4. AGENT RESPONSE: to append any agent message (chat reply or proposal):
+    //    setMessages((prev) => [...prev, { id: `msg-${Date.now()}`, role: "agent", content }]);
   };
 
   return (
@@ -825,26 +837,24 @@ function AgentPanel() {
         ) : (
           messages.map((msg) =>
             msg.role === "user" ? (
-              <div key={msg.id} className="flex justify-end gap-2 items-start">
+              // User message — right-aligned teal bubble, no avatar
+              <div key={msg.id} className="flex justify-end">
                 <div
                   className="max-w-[85%] rounded-xl rounded-tr-sm px-3 py-2 text-[11px] leading-snug text-white whitespace-pre-wrap"
                   style={{ background: "var(--accent-teal)" }}
                 >
                   {msg.content}
                 </div>
-                <div
-                  className="w-6 h-6 rounded-full flex items-center justify-center text-[8px] font-bold text-white shrink-0 mt-0.5"
-                  style={{ background: "oklch(0.55 0.1 250)" }}
-                >
-                  You
-                </div>
               </div>
             ) : (
-              <div key={msg.id} className="flex gap-2 items-start">
-                <div className="w-6 h-6 rounded-full bg-canvas border border-border flex items-center justify-center shrink-0 mt-0.5">
-                  <Sparkles size={10} style={{ color: "var(--accent-teal)" }} />
-                </div>
-                <div className="flex-1 bg-card border border-border rounded-xl rounded-tl-sm px-3 py-2.5 text-[11px] leading-snug text-muted-foreground whitespace-pre-wrap">
+              // Agent message — left-aligned muted bubble, no avatar.
+              // PROPOSAL RENDER POINT: when the agent proposes slide edits, this bubble
+              // will carry a pending proposal (structured IR mutations) instead of plain text.
+              // Render as: message content + Accept / Discard action row beneath the bubble.
+              // Accepted → dispatch({ type: "commit", updater: applyMutations })
+              // Discarded → drop the proposal, bubble stays as a plain chat message.
+              <div key={msg.id} className="flex">
+                <div className="max-w-[85%] bg-card border border-border rounded-xl rounded-tl-sm px-3 py-2.5 text-[11px] leading-snug text-muted-foreground whitespace-pre-wrap">
                   {msg.content}
                 </div>
               </div>

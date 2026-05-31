@@ -10,7 +10,7 @@ import { Minimap } from "./Minimap";
 import { ScenePanel } from "./ScenePanel";
 import { GhostCard } from "./GhostCard";
 import { GenerateNode } from "./GenerateNode";
-import { ContentGraphView } from "./ContentGraphView";
+import { AddContent } from "./AddContent";
 import { SlideCard } from "./SlideCard";
 import { ContentNodeCard } from "./ContentNodeCard";
 import type { ContentNode } from "@/lib/ir";
@@ -23,7 +23,6 @@ import {
   type SceneStatus,
   type SceneRole,
   type SceneKind,
-  type ContentBlock,
 } from "@/lib/projektor-data";
 import { Maximize2, Minus, Plus, Wand2, X } from "lucide-react";
 import {
@@ -213,7 +212,6 @@ export function BoardView({
     y2: number;
   } | null>(null);
   const [inspectorOpen, setInspectorOpen] = useState(true);
-  const [contentSceneId, setContentSceneId] = useState<string | null>(null);
   const [pan, setPan] = useState({ x: 0, y: 0 });
   const [focusPicked, setFocusPicked] = useState(false);
   const [outlineOpen, setOutlineOpen] = useState(false);
@@ -248,7 +246,6 @@ export function BoardView({
   const panRef = useRef<{ x: number; y: number } | null>(null);
   const selBoxOriginRef = useRef<{ cx: number; cy: number } | null>(null);
   const viewportRef = useRef<HTMLDivElement>(null);
-  const blockSeq = useRef(0); // monotonic ids for added content blocks
   const genSeq = useRef(0); // monotonic ids for generated candidate nodes
   const newSeq = useRef(0); // monotonic ids for blank scenes added from the rail
   const saveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -398,36 +395,6 @@ export function BoardView({
   const toggleLock = (id: string) =>
     setNodes((ns) =>
       ns.map((n) => (n.id === id ? { ...n, locked: !n.locked } : n)),
-    );
-  const addBlock = (id: string, draft: Omit<ContentBlock, "id">) => {
-    blockSeq.current += 1;
-    const block: ContentBlock = { id: `${id}-b-${blockSeq.current}`, ...draft };
-    setNodes((ns) =>
-      ns.map((n) =>
-        n.id === id ? { ...n, blocks: [...(n.blocks ?? []), block] } : n,
-      ),
-    );
-  };
-  const moveBlock = (id: string, blockId: string, cx: number, cy: number) =>
-    setNodes((ns) =>
-      ns.map((n) =>
-        n.id === id
-          ? {
-              ...n,
-              blocks: (n.blocks ?? []).map((b) =>
-                b.id === blockId ? { ...b, cx, cy } : b,
-              ),
-            }
-          : n,
-      ),
-    );
-  const removeBlock = (id: string, blockId: string) =>
-    setNodes((ns) =>
-      ns.map((n) =>
-        n.id === id
-          ? { ...n, blocks: (n.blocks ?? []).filter((b) => b.id !== blockId) }
-          : n,
-      ),
     );
   // Relation lives on the edge into this node; editing it updates the canvas label.
   const setRelation = (toId: string, relation: EdgeRelation) =>
@@ -929,24 +896,6 @@ export function BoardView({
     setInspectorOpen(true);
   };
 
-  // Drilling into a scene's content swaps the whole board for its content graph.
-  const contentScene = contentSceneId
-    ? (nodes.find((n) => n.id === contentSceneId) ?? null)
-    : null;
-  if (contentScene) {
-    return (
-      <div className="flex-1 flex flex-col min-w-0 relative">
-        <ContentGraphView
-          scene={contentScene}
-          onBack={() => setContentSceneId(null)}
-          onAddBlock={addBlock}
-          onRemoveBlock={removeBlock}
-          onMoveBlock={moveBlock}
-        />
-      </div>
-    );
-  }
-
   return (
     <div className="flex-1 flex flex-col min-w-0 relative">
       {/* Canvas */}
@@ -1331,14 +1280,40 @@ export function BoardView({
             onChangeRole={setRole}
             onChangeRelation={setRelation}
             onToggleLock={toggleLock}
-            onAddBlock={addBlock}
-            onRemoveBlock={removeBlock}
-            onOpenContent={setContentSceneId}
             onAccept={acceptGhost}
             onDiscard={discardGhost}
             onReconsider={reconsiderGhost}
             onDelete={deleteNode}
           />
+        )}
+
+        {/* Floating "Add content" button — creates a ContentNode in the global pool */}
+        {onContentPoolChange && (
+          <div
+            className="absolute left-5 bottom-5 z-20"
+            onMouseDown={(e) => e.stopPropagation()}
+          >
+            <AddContent
+              variant="pill"
+              onAdd={(draft) => {
+                const id = `cp-manual-${Date.now()}`;
+                const centerX = (viewportRef.current
+                  ? viewportRef.current.clientWidth / 2
+                  : 400) / zoom - pan.x / zoom;
+                const centerY = (viewportRef.current
+                  ? viewportRef.current.clientHeight / 2
+                  : 300) / zoom - pan.y / zoom;
+                const newNode: ContentNode =
+                  draft.type === "Image"
+                    ? { id, kind: "image", payload: { url: draft.src ?? "", caption: draft.label } }
+                    : { id, kind: "text", payload: { role: "claim", text: draft.label } };
+                onContentPoolChange([
+                  ...(contentPool ?? []),
+                  { ...newNode, graphPosition: { x: centerX, y: centerY } },
+                ]);
+              }}
+            />
+          </div>
         )}
 
         {/* Floating zoom pill */}

@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { loadSlides, loadDeck, saveDeck } from "@/lib/firestore-slides";
+import { loadDeck, saveDeck } from "@/lib/firestore-slides";
 import { useAuth } from "@/context/AuthContext";
 import { expandNode } from "@/lib/expandApi";
 import { GraphMapPanel } from "./GraphMapPanel";
@@ -10,8 +10,12 @@ import { Minimap } from "./Minimap";
 import { ScenePanel } from "./ScenePanel";
 import { GhostCard } from "./GhostCard";
 import { GenerateNode } from "./GenerateNode";
-import { ContentGraphView } from "./ContentGraphView";
+import { AddContent } from "./AddContent";
 import { SlideCard } from "./SlideCard";
+import { ContentNodeCard } from "./ContentNodeCard";
+import { ContentNodePanel } from "./ContentNodePanel";
+import { ContentGraphView } from "./ContentGraphView";
+import type { ContentNode } from "@/lib/ir";
 import {
   INITIAL_NODES,
   INITIAL_EDGES,
@@ -43,6 +47,10 @@ interface Props {
   // Called whenever BoardView's nodes/edges change structurally (new nodes, text edits).
   // Keeps index.tsx's deck in sync so EditorView can see freshest content at double-click.
   onNodesChange?: (nodes: SlideNode[], edges: Edge[]) => void;
+  contentPool?: ContentNode[];
+  onContentPoolChange?: (pool: ContentNode[]) => void;
+  // Firestore project ID — required for saving. If absent, saves are skipped.
+  projectId?: string;
 }
 
 // Placeholder chosen spine — real pick logic lands with the branch model.
@@ -189,6 +197,9 @@ export function BoardView({
   initialEdges,
   externalSlides,
   onNodesChange,
+  contentPool,
+  onContentPoolChange,
+  projectId,
 }: Props) {
   const [nodes, setNodes] = useState<SlideNode[]>(
     initialNodes ?? INITIAL_NODES,
@@ -196,6 +207,7 @@ export function BoardView({
   const [edges, setEdges] = useState<Edge[]>(initialEdges ?? INITIAL_EDGES);
   const [selected, setSelected] = useState<string | null>("n1");
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set(["n1"]));
+  const [selectedContentId, setSelectedContentId] = useState<string | null>(null);
   const [canvasMode, setCanvasMode] = useState<"navigate" | "select">(
     "navigate",
   );
@@ -206,7 +218,6 @@ export function BoardView({
     y2: number;
   } | null>(null);
   const [inspectorOpen, setInspectorOpen] = useState(true);
-  const [contentSceneId, setContentSceneId] = useState<string | null>(null);
   const [pan, setPan] = useState({ x: 0, y: 0 });
   const [focusPicked, setFocusPicked] = useState(false);
   const [outlineOpen, setOutlineOpen] = useState(false);
@@ -241,7 +252,6 @@ export function BoardView({
   const panRef = useRef<{ x: number; y: number } | null>(null);
   const selBoxOriginRef = useRef<{ cx: number; cy: number } | null>(null);
   const viewportRef = useRef<HTMLDivElement>(null);
-  const blockSeq = useRef(0); // monotonic ids for added content blocks
   const genSeq = useRef(0); // monotonic ids for generated candidate nodes
   const newSeq = useRef(0); // monotonic ids for blank scenes added from the rail
   const saveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -272,31 +282,21 @@ export function BoardView({
     });
   }, [externalSlides]);
 
-  // Load deck from Firestore on mount. Only runs for the default board (no custom
-  // deck passed via props) — generated decks must not be overwritten on load.
-  // Falls back to the legacy per-slide loadSlides() if no deck document exists yet.
-  // frameNodes auto-fits so every node including Generate-next buttons is visible.
+  // Load deck from Firestore on mount. Only runs when no custom initialNodes are
+  // passed (i.e. the default board) and a projectId is known.
   useEffect(() => {
-    if (!currentUser || initialNodes !== INITIAL_NODES) return;
-    loadDeck(currentUser.uid)
+    if (!currentUser || !projectId || initialNodes !== INITIAL_NODES) return;
+    loadDeck(currentUser.uid, projectId)
       .then((saved) => {
         if (saved && saved.nodes.length > 0) {
           setNodes(saved.nodes);
           setEdges(saved.edges);
           setTimeout(() => frameNodes(saved.nodes), 0);
-        } else {
-          // Legacy fallback: individual slide documents (pre-deck-persistence era)
-          return loadSlides().then((remote) => {
-            if (remote && remote.length > 0) {
-              setNodes(remote);
-              setTimeout(() => frameNodes(remote), 0);
-            }
-          });
         }
       })
       .catch((err) => console.error("[BoardView] Failed to load deck:", err));
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [currentUser]);
+  }, [currentUser, projectId]);
 
   // Auto-save the deck to Firestore whenever nodes or edges change (debounced).
   // Scoped to the authenticated user — both views project this same document.
@@ -304,11 +304,11 @@ export function BoardView({
   // Also notifies index.tsx immediately (non-debounced) so EditorView gets freshest
   // text content (body, eyebrow, title) for slide-design candidate generation.
   useEffect(() => {
-    if (!currentUser) return;
+    if (!currentUser || !projectId) return;
     onNodesChangeRef.current?.(nodes, edges);
     if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
     saveTimerRef.current = setTimeout(() => {
-      saveDeck(currentUser.uid, nodes, edges).catch((err) =>
+      saveDeck(currentUser.uid, projectId, nodes, edges).catch((err) =>
         console.error("[BoardView] Failed to save deck:", err),
       );
     }, 1500);
@@ -316,7 +316,7 @@ export function BoardView({
       if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [nodes, edges, currentUser]);
+  }, [nodes, edges, currentUser, projectId]);
 
   const findNode = (id: string) => nodes.find((n) => n.id === id)!;
 
@@ -392,6 +392,8 @@ export function BoardView({
     setNodes((ns) =>
       ns.map((n) => (n.id === id ? { ...n, locked: !n.locked } : n)),
     );
+  const [contentSceneId, setContentSceneId] = useState<string | null>(null);
+  const blockSeq = useRef(0); // monotonic ids for added content blocks
   const addBlock = (id: string, draft: Omit<ContentBlock, "id">) => {
     blockSeq.current += 1;
     const block: ContentBlock = { id: `${id}-b-${blockSeq.current}`, ...draft };
@@ -640,6 +642,7 @@ export function BoardView({
       setSelected(null);
       setSelectedIds(new Set());
       setSelectedEdge(null);
+      setSelectedContentId(null);
       panRef.current = { x: e.clientX - pan.x, y: e.clientY - pan.y };
       const move = (ev: MouseEvent) => {
         if (!panRef.current) return;
@@ -1187,6 +1190,28 @@ export function BoardView({
             );
           })}
 
+          {/* Content pool nodes — floating text/image cards below their source slides */}
+          {contentPool?.map((cn) => (
+            <ContentNodeCard
+              key={cn.id}
+              node={cn}
+              selected={selectedContentId === cn.id}
+              zoom={zoom}
+              onSelect={() => {
+                setSelected(null);
+                setSelectedIds(new Set());
+                setSelectedContentId(cn.id);
+              }}
+              onMove={(x, y) => {
+                onContentPoolChange?.(
+                  contentPool.map((c) =>
+                    c.id === cn.id ? { ...c, graphPosition: { x, y } } : c,
+                  ),
+                );
+              }}
+            />
+          ))}
+
           {/* Generate-next nodes — one per leaf, just below the card */}
           {leafNodes.map((n) => {
             const cx = n.x + (n.width ?? 320) / 2;
@@ -1313,8 +1338,29 @@ export function BoardView({
           />
         )}
 
-        {/* Right scene panel (Chat / Inspect / Argument) */}
-        {inspectorOpen && (
+        {/* Right panel — content node panel takes priority over scene panel */}
+        {selectedContentId && contentPool ? (
+          (() => {
+            const cn = contentPool.find((c) => c.id === selectedContentId);
+            return cn ? (
+              <ContentNodePanel
+                node={cn}
+                onClose={() => setSelectedContentId(null)}
+                onChange={(updated) => {
+                  onContentPoolChange?.(
+                    contentPool.map((c) =>
+                      c.id === cn.id ? { ...updated, graphPosition: c.graphPosition } : c,
+                    ),
+                  );
+                }}
+                onDelete={() => {
+                  onContentPoolChange?.(contentPool.filter((c) => c.id !== cn.id));
+                  setSelectedContentId(null);
+                }}
+              />
+            ) : null;
+          })()
+        ) : inspectorOpen ? (
           <ScenePanel
             node={selectedNode}
             selectedCount={selectedIds.size}
@@ -1334,6 +1380,35 @@ export function BoardView({
             onReconsider={reconsiderGhost}
             onDelete={deleteNode}
           />
+        ) : null}
+
+        {/* Floating "Add content" button — creates a ContentNode in the global pool */}
+        {onContentPoolChange && (
+          <div
+            className="absolute left-5 bottom-5 z-20"
+            onMouseDown={(e) => e.stopPropagation()}
+          >
+            <AddContent
+              variant="pill"
+              onAdd={(draft) => {
+                const id = `cp-manual-${Date.now()}`;
+                const centerX = (viewportRef.current
+                  ? viewportRef.current.clientWidth / 2
+                  : 400) / zoom - pan.x / zoom;
+                const centerY = (viewportRef.current
+                  ? viewportRef.current.clientHeight / 2
+                  : 300) / zoom - pan.y / zoom;
+                const newNode: ContentNode =
+                  draft.type === "Image"
+                    ? { id, kind: "image", payload: { url: draft.src ?? "", caption: draft.label } }
+                    : { id, kind: "text", payload: { role: "claim", text: draft.label } };
+                onContentPoolChange([
+                  ...(contentPool ?? []),
+                  { ...newNode, graphPosition: { x: centerX, y: centerY } },
+                ]);
+              }}
+            />
+          </div>
         )}
 
         {/* Floating zoom pill */}

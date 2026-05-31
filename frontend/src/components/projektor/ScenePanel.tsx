@@ -4,6 +4,7 @@ import {
   ChevronDown,
   ChevronRight,
   LayoutGrid,
+  Image as ImageIcon,
   Lock,
   RotateCcw,
   Send,
@@ -18,8 +19,6 @@ import {
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
-import { AddContent } from "./AddContent";
-import { blockIcon } from "@/lib/content-blocks";
 import type {
   ComponentType,
   ContentBlock,
@@ -203,9 +202,6 @@ export function ScenePanel({
           onChangeRole={onChangeRole}
           onChangeRelation={onChangeRelation}
           onToggleLock={onToggleLock}
-          onAddBlock={onAddBlock}
-          onRemoveBlock={onRemoveBlock}
-          onOpenContent={onOpenContent}
           onDelete={onDelete}
         />
       ) : (
@@ -223,9 +219,6 @@ function InspectTab({
   onChangeRole,
   onChangeRelation,
   onToggleLock,
-  onAddBlock,
-  onRemoveBlock,
-  onOpenContent,
   onDelete,
 }: {
   node: SlideNode;
@@ -235,14 +228,10 @@ function InspectTab({
   onChangeRole: (id: string, r: SceneRole) => void;
   onChangeRelation: (toId: string, r: EdgeRelation) => void;
   onToggleLock: (id: string) => void;
-  onAddBlock: (id: string, block: Omit<ContentBlock, "id">) => void;
-  onRemoveBlock: (id: string, blockId: string) => void;
-  onOpenContent: (id: string) => void;
   onDelete: (id: string) => void;
 }) {
   const status = STATUS_OPTIONS.find((o) => o.value === node.status)!;
   const role = node.role ?? "claim";
-  const blocks = node.blocks ?? [];
   // Static placeholders (computed deterministically so scenes differ a little).
   const designScore = 72 + ((node.index * 7) % 24);
   const claimFlags =
@@ -365,68 +354,6 @@ function InspectTab({
           </button>
         </Field>
 
-        <div className="h-px bg-line-soft" />
-
-        {/* Content blocks — the header is a button that opens the scene's
-            content graph; below it, the list and the Add-content popup. */}
-        <div>
-          <button
-            type="button"
-            onClick={() => onOpenContent(node.id)}
-            className="w-full mb-2 flex items-center justify-between gap-2 px-3 py-2 rounded-lg border border-border bg-surface-2 hover:border-[color:var(--accent)] hover:bg-canvas/60 transition-colors"
-          >
-            <span className="flex items-center gap-2 text-[12.5px] font-semibold text-ink">
-              <LayoutGrid size={14} className="text-muted-foreground" />
-              Content blocks
-            </span>
-            <span className="flex items-center gap-1.5 text-muted-foreground">
-              <span className="text-[11px] font-mono">{blocks.length}</span>
-              <ChevronRight size={14} />
-            </span>
-          </button>
-
-          {blocks.length === 0 ? (
-            <div className="rounded-lg border border-dashed border-border px-3 py-4 text-center text-[12px] text-muted-foreground">
-              No content yet.
-            </div>
-          ) : (
-            <div className="space-y-1.5">
-              {blocks.map((b) => {
-                const Icon = blockIcon(b.type);
-                return (
-                  <div
-                    key={b.id}
-                    className="group flex items-center gap-2 px-2.5 py-2 rounded-lg border border-border bg-surface-2"
-                  >
-                    <span className="flex items-center justify-center w-6 h-6 rounded-md bg-canvas text-ink-soft shrink-0">
-                      <Icon size={13} />
-                    </span>
-                    <span className="min-w-0 flex-1">
-                      <span className="block font-mono text-[9px] uppercase tracking-wider text-muted-foreground">
-                        {b.type}
-                      </span>
-                      <span className="block text-[12.5px] text-ink truncate">
-                        {b.label}
-                      </span>
-                    </span>
-                    <button
-                      type="button"
-                      aria-label={`Remove ${b.type}`}
-                      onClick={() => onRemoveBlock(node.id, b.id)}
-                      className="text-faint hover:text-danger opacity-0 group-hover:opacity-100 transition-opacity shrink-0"
-                    >
-                      <X size={13} />
-                    </button>
-                  </div>
-                );
-              })}
-            </div>
-          )}
-
-          <div className="mt-2">
-            <AddContent onAdd={(block) => onAddBlock(node.id, block)} />
-          </div>
-        </div>
       </div>
 
       {/* Footer: Generate scene + permanent delete */}

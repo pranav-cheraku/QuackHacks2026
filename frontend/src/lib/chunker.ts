@@ -8,6 +8,7 @@
 // If the server function fails, mockChunkIntoScenes provides a graceful fallback.
 
 import type { SlideNode, Edge, EdgeRelation, SceneKind, SceneStatus, SlideState, DesignStatus } from "./projektor-data";
+import type { ContentNode } from "./ir";
 import { nextId } from "./slide-model";
 import { chunkDeck } from "./chunkApi";
 
@@ -17,6 +18,7 @@ import { chunkDeck } from "./chunkApi";
 export interface HydrateResult {
   nodes: SlideNode[];
   edges: Edge[];
+  contentPool: ContentNode[];
   // "gemini" = real LLM ran; "mock" = Gemini unavailable, used paragraph-split fallback.
   source: "gemini" | "mock";
   // Present only when source === "mock" — the actual error that caused the fallback.
@@ -92,6 +94,39 @@ function mockChunkIntoScenes(text: string, targetCount: number): ChunkResult[] {
   return chunks;
 }
 
+// ── Content node extraction ───────────────────────────────────────────────────
+// Parse a slide's body text into discrete ContentNode objects.
+// • Bullet format: "• item one\n• item two" → one node per bullet
+// • Plain text: whole body becomes a single node
+const CONTENT_NODE_W = 220;
+const CONTENT_NODE_GAP = 16;
+
+function bodyToContentNodes(
+  body: string,
+  slideNode: SlideNode,
+): ContentNode[] {
+  const trimmed = body.trim();
+  if (!trimmed) return [];
+
+  const isBulletList = trimmed.includes("•");
+  const rawItems = isBulletList
+    ? trimmed.split("\n").map((l) => l.replace(/^•\s*/, "").trim()).filter(Boolean)
+    : [trimmed];
+
+  const baseY = slideNode.y + (slideNode.height ?? 200) + 80;
+
+  return rawItems.map((text, i) => ({
+    id: `cp-${slideNode.id}-${i}-${Date.now()}`,
+    kind: "text" as const,
+    payload: { role: "claim" as const, text },
+    sourceRef: slideNode.id,
+    graphPosition: {
+      x: slideNode.x + i * (CONTENT_NODE_W + CONTENT_NODE_GAP),
+      y: baseY,
+    },
+  }));
+}
+
 // ── Bucket hydration ──────────────────────────────────────────────────────────
 // Maps ChunkResult[] → root title bucket + exactly 2 path buckets + branch edges.
 //
@@ -108,7 +143,7 @@ function mockChunkIntoScenes(text: string, targetCount: number): ChunkResult[] {
 // IMPORTANT: these are INFO BUCKETS, not slides. root is undefined.
 // Slide design happens lazily on double-click via the slide-design agent
 // (see slideDesignAgent.ts — SLIDE-DESIGN AGENT SWAP POINT).
-function buildSlideNodes(chunks: ChunkResult[]): Pick<HydrateResult, "nodes" | "edges"> {
+function buildSlideNodes(chunks: ChunkResult[]): Pick<HydrateResult, "nodes" | "edges" | "contentPool"> {
   const NODE_W = 320;
   const NODE_H = 200;
   const ts = Date.now();
@@ -179,7 +214,16 @@ function buildSlideNodes(chunks: ChunkResult[]): Pick<HydrateResult, "nodes" | "
     dashed: true,
   }));
 
-  return { nodes: [titleNode, ...pathNodes], edges };
+  const allNodes = [titleNode, ...pathNodes];
+
+  // Extract content nodes from each slide's body text.
+  const contentPool: ContentNode[] = allNodes.flatMap((node, idx) => {
+    const chunk = idx === 0 ? titleChunk : pathChunks[idx - 1];
+    if (!chunk?.body) return [];
+    return bodyToContentNodes(chunk.body, node);
+  });
+
+  return { nodes: allNodes, edges, contentPool };
 }
 
 // ── Public API ────────────────────────────────────────────────────────────────
@@ -200,5 +244,6 @@ export async function hydrateToSlides(text: string): Promise<HydrateResult> {
     mockReason = errMsg;
   }
 
-  return { ...buildSlideNodes(chunks), source, mockReason };
+  const { nodes, edges, contentPool } = buildSlideNodes(chunks);
+  return { nodes, edges, contentPool, source, mockReason };
 }

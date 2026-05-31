@@ -40,6 +40,9 @@ interface Props {
   // Layout updates from EditorView (via index.tsx). BoardView merges the slide-layout
   // fields (root, candidates, activeDesignId) so its auto-save includes the latest IR.
   externalSlides?: SlideNode[];
+  // Called whenever BoardView's nodes/edges change structurally (new nodes, text edits).
+  // Keeps index.tsx's deck in sync so EditorView can see freshest content at double-click.
+  onNodesChange?: (nodes: SlideNode[], edges: Edge[]) => void;
 }
 
 // Placeholder chosen spine — real pick logic lands with the branch model.
@@ -185,6 +188,7 @@ export function BoardView({
   initialNodes,
   initialEdges,
   externalSlides,
+  onNodesChange,
 }: Props) {
   const [nodes, setNodes] = useState<SlideNode[]>(
     initialNodes ?? INITIAL_NODES,
@@ -249,17 +253,23 @@ export function BoardView({
   // fields (root, candidates, activeDesignId). This keeps both in the same Firestore
   // document without either view overwriting the other's fields.
   const externalSlidesRef = useRef(externalSlides);
+  // Stable ref so auto-save effect can call onNodesChange without adding it to deps.
+  const onNodesChangeRef = useRef(onNodesChange);
+  onNodesChangeRef.current = onNodesChange;
   useEffect(() => {
     if (!externalSlides || externalSlides === externalSlidesRef.current) return;
     externalSlidesRef.current = externalSlides;
-    setNodes((prev) =>
-      prev.map((n) => {
+    setNodes((prev) => {
+      const next = prev.map((n) => {
         const ext = externalSlides.find((e) => e.id === n.id);
         if (!ext) return n;
         if (n.root === ext.root && n.activeDesignId === ext.activeDesignId) return n;
         return { ...n, root: ext.root, candidates: ext.candidates, activeDesignId: ext.activeDesignId };
-      }),
-    );
+      });
+      // Short-circuit: only update state if a layout field actually changed.
+      // Prevents the onNodesChange → setDeck → externalSlides → merge → setNodes loop.
+      return next.every((n, i) => n === prev[i]) ? prev : next;
+    });
   }, [externalSlides]);
 
   // Load deck from Firestore on mount. Only runs for the default board (no custom
@@ -291,8 +301,11 @@ export function BoardView({
   // Auto-save the deck to Firestore whenever nodes or edges change (debounced).
   // Scoped to the authenticated user — both views project this same document.
   // GRAPH SYNC: this is the write side of the deck ↔ Firestore binding.
+  // Also notifies index.tsx immediately (non-debounced) so EditorView gets freshest
+  // text content (body, eyebrow, title) for slide-design candidate generation.
   useEffect(() => {
     if (!currentUser) return;
+    onNodesChangeRef.current?.(nodes, edges);
     if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
     saveTimerRef.current = setTimeout(() => {
       saveDeck(currentUser.uid, nodes, edges).catch((err) =>

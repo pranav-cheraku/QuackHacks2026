@@ -166,7 +166,7 @@ export function EditorView({
     }));
     dispatch({ type: "init", slides: hydratedSlides });
     setLocalEdges(deckEdges);
-    setActiveId(hydratedSlides[0]?.id ?? "n1");
+    setActiveId(hydratedSlides[0]?.id ?? slides[0]?.id ?? "");
   // Run once when deckLoaded flips to true — nodes/deckEdges are stable at that point.
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [deckLoaded]);
@@ -185,13 +185,17 @@ export function EditorView({
     return () => { if (deckSyncTimerRef.current) clearTimeout(deckSyncTimerRef.current); };
   }, [slides, localEdges]);
 
-  const [activeId, setActiveId] = useState(() => startNodeId ?? nodes[0]?.id ?? "n1");
+  const [activeId, setActiveId] = useState(() => startNodeId ?? nodes[0]?.id ?? "");
   const [selectedElId, setSelectedElId] = useState<string | null>(null);
   const [editingElId, setEditingElId] = useState<string | null>(null);
   const [railSelectionActive, setRailSelectionActive] = useState(true);
   const [rightTab, setRightTab] = useState<RightTab>("agent");
   const slideRef = useRef<HTMLDivElement>(null);
   const lastStartNodeIdRef = useRef<string | null>(startNodeId);
+  // Always-current snapshot of the nodes prop — lets the startNodeId effect read
+  // freshest BoardView text (body, eyebrow, title) without adding nodes to its deps.
+  const nodesRef = useRef<SlideNode[]>(nodes);
+  nodesRef.current = nodes;
 
   const activeSlide = slides.find((s) => s.id === activeId) ?? slides[0];
   const selectedLeaf = collectLeaves(activeSlide?.root ?? emptyRoot("")).find((l) => l.id === selectedElId) ?? null;
@@ -203,19 +207,46 @@ export function EditorView({
   useEffect(() => {
     if (startNodeId === lastStartNodeIdRef.current) return;
     lastStartNodeIdRef.current = startNodeId;
-    if (!startNodeId || !slides.some((s) => s.id === startNodeId)) return;
+    if (!startNodeId) return;
+
+    // Find target in EditorView's slides (has layout edits) or fall back to nodes prop
+    // (new containers created in BoardView that haven't been injected into slides yet).
+    let slideTarget = slides.find((s) => s.id === startNodeId);
+
+    if (!slideTarget) {
+      const fromProps = nodesRef.current.find((n) => n.id === startNodeId);
+      if (!fromProps) return; // genuinely missing from both — do nothing
+      // Inject the new node into EditorView's slides so it's first-class.
+      const injected: SlideNode = {
+        ...fromProps,
+        index: slides.length + 1,
+        root: fromProps.root ?? emptyRoot(fromProps.id),
+        candidates: fromProps.candidates ?? [],
+        activeDesignId: fromProps.activeDesignId ?? null,
+      };
+      dispatch({ type: "commit", updater: (prev) =>
+        prev.some((s) => s.id === startNodeId) ? prev : [...prev, injected]
+      });
+      slideTarget = injected;
+    }
+
     setActiveId(startNodeId);
     setSelectedElId(null);
     setEditingElId(null);
     setRailSelectionActive(true);
 
-    // SLIDE-DESIGN AGENT: double-clicking a content bucket → generate layout candidates
-    // from its content (title, body, eyebrow) and populate the Designs panel.
+    // SLIDE-DESIGN AGENT: double-clicking a content bucket → generate layout candidates.
+    // Use nodes prop for freshest text content (BoardView Inspector edits live there);
+    // keep layout fields (root, candidates) from slideTarget (EditorView's copy).
     // Gemini swap point: replace generateSlideCandidates with a real backend call.
     // Input:  node.title / node.body / node.eyebrow (box content from chunker)
     // Output: SlideCandidate[] with root: LayoutNode — wired here, Gemini swap in slideDesignAgent.ts
-    const target = slides.find((s) => s.id === startNodeId);
-    if (target && (!target.candidates || target.candidates.length === 0)) {
+    const propNode = nodesRef.current.find((n) => n.id === startNodeId);
+    const target: SlideNode = propNode
+      ? { ...slideTarget, title: propNode.title, body: propNode.body, eyebrow: propNode.eyebrow }
+      : slideTarget;
+
+    if (!target.candidates || target.candidates.length === 0) {
       setRightTab("design"); // open Designs panel so candidates appear immediately
       generateSlideCandidates(target).then((candidates) => {
         if (!candidates.length) return;

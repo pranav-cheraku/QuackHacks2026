@@ -152,6 +152,7 @@ function Projektor() {
           initialNodes={deck}
           initialEdges={deckEdges}
           externalSlides={deck}
+          onNodesChange={handleDeckChange}
           zoom={zoom}
           setZoom={setZoom}
           onOpenEditor={(id) => {

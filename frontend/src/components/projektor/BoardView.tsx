@@ -318,9 +318,7 @@ export function BoardView({
     onNodesChangeRef.current?.(nodes, edges);
     if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
     saveTimerRef.current = setTimeout(() => {
-      // HOTFIX: merge conflict here. choose which one. 
-      saveDeck(currentUser.uid, nodes, edges, contentPool ?? []).catch((err) =>
-      saveDeck(currentUser.uid, projectId, nodes, edges).catch((err) =>
+      saveDeck(currentUser.uid, projectId, nodes, edges, contentPool ?? []).catch((err) =>
         console.error("[BoardView] Failed to save deck:", err),
       );
     }, 1500);
@@ -328,8 +326,7 @@ export function BoardView({
       if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [nodes, edges, contentPool, currentUser]); // // HOTFIX: merge conflict here. choose which one. 
-  }, [nodes, edges, currentUser, projectId]);
+  }, [nodes, edges, contentPool, currentUser, projectId]);
 
   const findNode = (id: string) => nodes.find((n) => n.id === id)!;
 

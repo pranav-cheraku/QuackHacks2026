@@ -26,7 +26,7 @@ function SignUp() {
 
   useEffect(() => {
     if (!loading && currentUser) {
-      navigate({ to: "/", search: { deckId: undefined } });
+      navigate({ to: "/", search: { projectId: undefined } });
     }
   }, [loading, currentUser, navigate]);
 
@@ -42,7 +42,7 @@ function SignUp() {
     setSubmitting(true);
     try {
       await createUserWithEmailAndPassword(auth, email, password);
-      navigate({ to: "/", search: { deckId: undefined } });
+      navigate({ to: "/", search: { projectId: undefined } });
     } catch (err: unknown) {
       setError(friendlyError(err));
     } finally {
@@ -55,7 +55,7 @@ function SignUp() {
     setSubmitting(true);
     try {
       await signInWithPopup(auth, new GoogleAuthProvider());
-      navigate({ to: "/", search: { deckId: undefined } });
+      navigate({ to: "/", search: { projectId: undefined } });
     } catch (err: unknown) {
       setError(friendlyError(err));
     } finally {

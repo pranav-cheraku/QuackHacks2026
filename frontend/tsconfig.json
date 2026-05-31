@@ -3,7 +3,8 @@
     "src/**/*.ts",
     "src/**/*.tsx",
     "vite.config.ts",
-    "eslint.config.js"
+    "eslint.config.js",
+    "../backend/**/*.ts"
   ],
   "compilerOptions": {
     "target": "ES2022",
@@ -26,7 +27,12 @@
     "noFallthroughCasesInSwitch": true,
     "noUncheckedSideEffectImports": true,
     "paths": {
-      "@/*": ["./src/*"]
+      "@/*": ["./src/*"],
+      "@backend/*": ["../backend/*"],
+      "zod": ["./node_modules/zod"],
+      "zod/*": ["./node_modules/zod/*"],
+      "@google/generative-ai": ["./node_modules/@google/generative-ai"],
+      "@google/generative-ai/*": ["./node_modules/@google/generative-ai/*"]
     }
   }
 }

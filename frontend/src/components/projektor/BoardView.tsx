@@ -1,4 +1,5 @@
-import { useRef, useState } from "react";
+import { useRef, useState, useEffect } from "react";
+import { loadSlides } from "@/lib/firestore-slides";
 import { GraphMapPanel } from "./GraphMapPanel";
 import { GraphToolRail } from "./GraphToolRail";
 import { StatusFilterPanel } from "./StatusFilterPanel";
@@ -33,13 +34,14 @@ interface Props {
   zoom: number;
   setZoom: (z: number) => void;
   onOpenEditor: (nodeId: string) => void;
+  initialNodes?: SlideNode[];
+  initialEdges?: Edge[];
 }
 
 // Placeholder chosen spine — real pick logic lands with the branch model.
 const PICKED_PATH = new Set(["n1", "n3"]);
 
 // Placeholder candidate pool — stands in for the AI until a backend exists.
-// Generating a fork pulls the next two from here (cycling).
 const SUGGESTIONS: { title: string; rationale: string; kind: SceneKind }[] = [
   {
     title: "Why now — the urgency",
@@ -162,9 +164,9 @@ function anchor(n: SlideNode, side: "right" | "left" | "top" | "bottom") {
   return { x: n.x + w / 2, y: n.y + h };
 }
 
-export function BoardView({ zoom, setZoom, onOpenEditor }: Props) {
-  const [nodes, setNodes] = useState<SlideNode[]>(INITIAL_NODES);
-  const [edges, setEdges] = useState<Edge[]>(INITIAL_EDGES);
+export function BoardView({ zoom, setZoom, onOpenEditor, initialNodes, initialEdges }: Props) {
+  const [nodes, setNodes] = useState<SlideNode[]>(initialNodes ?? INITIAL_NODES);
+  const [edges, setEdges] = useState<Edge[]>(initialEdges ?? INITIAL_EDGES);
   const [selected, setSelected] = useState<string | null>("n1");
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set(["n1"]));
   const [canvasMode, setCanvasMode] = useState<"navigate" | "select">("navigate");
@@ -184,6 +186,24 @@ export function BoardView({ zoom, setZoom, onOpenEditor }: Props) {
   const viewportRef = useRef<HTMLDivElement>(null);
   const blockSeq = useRef(0); // monotonic ids for added content blocks
   const genSeq = useRef(0); // monotonic ids for generated candidate nodes
+
+  // Load slides from Firestore on mount so the graph reflects the live database.
+  // Only runs when using the default board (no custom deck passed via props) —
+  // if a custom deck was loaded (e.g. from the chunker), its nodes/edges must
+  // not be overwritten. frameNodes auto-fits the viewport so every node,
+  // including the rightmost leaf and its Generate-next button, is visible.
+  useEffect(() => {
+    if (initialNodes !== INITIAL_NODES) return;
+    loadSlides()
+      .then((remote) => {
+        if (remote && remote.length > 0) {
+          setNodes(remote);
+          setTimeout(() => frameNodes(remote), 0);
+        }
+      })
+      .catch((err) => console.error("[BoardView] Failed to load slides:", err));
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   const findNode = (id: string) => nodes.find((n) => n.id === id)!;
 
@@ -241,8 +261,6 @@ export function BoardView({ zoom, setZoom, onOpenEditor }: Props) {
     setEdges((es) => es.map((e) => (e.to === toId ? { ...e, relation } : e)));
 
   // --- Ghost (suggested branch) actions ------------------------------------
-  // Accept = pick this fork: promote it to a committed scene + solidify its
-  // edge, and dim the sibling candidates (same parent) — rejected-but-revisitable.
   const acceptGhost = (id: string) => {
     const parentId = edges.find((e) => e.to === id)?.from;
     const siblingGhostIds = parentId
@@ -266,12 +284,10 @@ export function BoardView({ zoom, setZoom, onOpenEditor }: Props) {
       es.map((e) => (e.to === id ? { ...e, dashed: false } : e)),
     );
   };
-  // Discard: keep it on the canvas but dimmed and revisitable (never deleted).
   const discardGhost = (id: string) => patchNode(id, { discarded: true });
   const reconsiderGhost = (id: string) => patchNode(id, { discarded: false });
 
-  // Delete: remove the node (and any subtree under it) for good — unlike
-  // Discard, there's no coming back. Re-tidies what's left.
+  // Delete: remove the node (and any subtree under it) for good.
   const deleteNode = (id: string) => {
     const toRemove = new Set<string>([id]);
     let grew = true;
@@ -300,8 +316,6 @@ export function BoardView({ zoom, setZoom, onOpenEditor }: Props) {
     ? edges.find((e) => e.to === selected)
     : undefined;
 
-  // A node dims when it's off the picked path (focus), filtered out by status,
-  // or a discarded (rejected-but-revisitable) suggested branch.
   const isNodeDimmed = (n: SlideNode) =>
     (focusPicked && !PICKED_PATH.has(n.id)) ||
     !activeStatuses.has(n.status) ||
@@ -309,15 +323,11 @@ export function BoardView({ zoom, setZoom, onOpenEditor }: Props) {
   const isEdgeDimmed = (e: Edge) =>
     isNodeDimmed(findNode(e.from)) || isNodeDimmed(findNode(e.to));
 
-  // A committed leaf slide carries a "Generate next" node just below it — the
-  // affordance that forks the next two candidates. Ghosts can't generate until
-  // they're accepted (picking unlocks Generate next); internal and discarded
-  // nodes don't show it either.
   const parentIds = new Set(edges.map((e) => e.from));
   const leafNodes = nodes.filter(
     (n) => !parentIds.has(n.id) && !n.discarded && !n.ghost,
   );
-  const GEN_GAP = 32; // gap between a card's bottom and its Generate-next node
+  const GEN_GAP = 32;
 
   const toggleStatus = (s: SceneStatus) =>
     setActiveStatuses((prev) => {
@@ -327,12 +337,8 @@ export function BoardView({ zoom, setZoom, onOpenEditor }: Props) {
       return next;
     });
 
-  // Auto-tidy: reflow the tree into a clean layered layout, in place.
   const autoTidy = () => setNodes((ns) => tidyNodes(ns, edges));
 
-  // Generate: spawn two AI candidate options below a card, then tidy so the
-  // growing tree stays readable. Works on any card — committed or ghost — so
-  // the possibility tree expands by clicking Generate, fork after fork.
   const generateOptions = (parentId: string) => {
     const parent = nodes.find((n) => n.id === parentId);
     if (!parent) return;
@@ -351,7 +357,6 @@ export function BoardView({ zoom, setZoom, onOpenEditor }: Props) {
       status: "draft",
       ghost: true,
       rationale: p.rationale,
-      // Rough position; tidyNodes overrides it. Required by the type.
       x: parent.x,
       y: parent.y + (parent.height ?? 180) + 300,
       width: 280,
@@ -374,7 +379,6 @@ export function BoardView({ zoom, setZoom, onOpenEditor }: Props) {
     selectNode(parentId);
   };
 
-  // Outline click → select the node and fly the canvas to center it.
   const jumpTo = (id: string) => {
     selectNode(id);
     const n = nodes.find((x) => x.id === id);
@@ -447,7 +451,6 @@ export function BoardView({ zoom, setZoom, onOpenEditor }: Props) {
           const bx2 = Math.max(selBoxOriginRef.current.cx, cur.x);
           const by2 = Math.max(selBoxOriginRef.current.cy, cur.y);
           if (bx2 - bx1 <= 4 && by2 - by1 <= 4) {
-            // Plain click (no drag) → deselect all
             setSelected(null);
             setSelectedIds(new Set());
           } else {
@@ -475,12 +478,10 @@ export function BoardView({ zoom, setZoom, onOpenEditor }: Props) {
     }
   };
 
-  // Frame a set of nodes so the whole tree fits in the viewport, with a
-  // generous margin. The zoom is snapped DOWN to a multiple of 5%.
   const frameNodes = (list: SlideNode[]) => {
     const vp = viewportRef.current;
     if (!vp || list.length === 0) return;
-    const pad = 200; // generous margin → zooms out more
+    const pad = 200;
     const minX = Math.min(...list.map((n) => n.x));
     const minY = Math.min(...list.map((n) => n.y));
     const maxX = Math.max(...list.map((n) => n.x + (n.width ?? 320)));
@@ -492,7 +493,6 @@ export function BoardView({ zoom, setZoom, onOpenEditor }: Props) {
       (vp.clientWidth - pad * 2) / spanX,
       (vp.clientHeight - pad * 2) / spanY,
     );
-    // snap down to a multiple of 5%, clamped to [30%, 100%]
     const pct = Math.min(100, Math.max(30, Math.floor((raw * 100) / 5) * 5));
     const z = pct / 100;
     setZoom(z);
@@ -502,10 +502,8 @@ export function BoardView({ zoom, setZoom, onOpenEditor }: Props) {
     });
   };
 
-  // Fit-to-view: move/zoom so the entire tree is visible (no rearrange).
   const fitToView = () => frameNodes(nodes);
 
-  // Zoom in/out in 5% steps, snapped to multiples of 5.
   const zoomBy = (dir: number) => {
     const pct = Math.round((zoom * 100) / 5) * 5;
     setZoom(Math.min(200, Math.max(30, pct + dir * 5)) / 100);
@@ -563,8 +561,11 @@ export function BoardView({ zoom, setZoom, onOpenEditor }: Props) {
               </marker>
             </defs>
             {edges.map((e, i) => {
-              const a = anchor(findNode(e.from), "bottom");
-              const b = anchor(findNode(e.to), "top");
+              const fromNode = findNode(e.from);
+              const toNode = findNode(e.to);
+              if (!fromNode || !toNode) return null;
+              const a = anchor(fromNode, "bottom");
+              const b = anchor(toNode, "top");
               const dim = isEdgeDimmed(e);
               return (
                 <path

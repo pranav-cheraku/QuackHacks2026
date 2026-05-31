@@ -45,18 +45,11 @@ const CENTER_ROW = 1500;
 const SPAN4 = SNAP_STEP * 40; // 40% of width
 const SPAN2 = SNAP_STEP * 25; // 25% of height
 
-export function makeTextElement(
-  overrides?: Partial<SlideElement>,
-): SlideElement {
+export function makeTextElement(overrides?: Partial<SlideElement>): SlideElement {
   return {
     id: nextId(),
     type: "text",
-    placement: {
-      col: CENTER_COL,
-      row: CENTER_ROW,
-      colSpan: SPAN4,
-      rowSpan: SPAN2,
-    },
+    placement: { col: CENTER_COL, row: CENTER_ROW, colSpan: SPAN4, rowSpan: SPAN2 },
     zIndex: 1,
     opacity: 1,
     rotation: 0,
@@ -73,18 +66,11 @@ export function makeTextElement(
   };
 }
 
-export function makeShapeElement(
-  overrides?: Partial<SlideElement>,
-): SlideElement {
+export function makeShapeElement(overrides?: Partial<SlideElement>): SlideElement {
   return {
     id: nextId(),
     type: "shape",
-    placement: {
-      col: CENTER_COL,
-      row: CENTER_ROW,
-      colSpan: SPAN4,
-      rowSpan: SPAN2,
-    },
+    placement: { col: CENTER_COL, row: CENTER_ROW, colSpan: SPAN4, rowSpan: SPAN2 },
     zIndex: 1,
     opacity: 1,
     rotation: 0,
@@ -98,18 +84,11 @@ export function makeShapeElement(
   };
 }
 
-export function makeImageElement(
-  overrides?: Partial<SlideElement>,
-): SlideElement {
+export function makeImageElement(overrides?: Partial<SlideElement>): SlideElement {
   return {
     id: nextId(),
     type: "image",
-    placement: {
-      col: CENTER_COL,
-      row: CENTER_ROW,
-      colSpan: SPAN4,
-      rowSpan: SPAN2 * 2,
-    },
+    placement: { col: CENTER_COL, row: CENTER_ROW, colSpan: SPAN4, rowSpan: SPAN2 * 2 },
     zIndex: 1,
     opacity: 1,
     rotation: 0,

@@ -6,6 +6,8 @@
 // The static JSX templates in EditorView / SlideThumb are no longer used.
 
 import type { SlideElement } from "./slide-model";
+import type { LayoutNode, LeafNode, ContentBlock, TextBlockStyle, ShapeBlockStyle } from "./ir";
+import { makeLeafId } from "./ir";
 
 const TEAL = "oklch(0.54 0.105 192)";
 const TEAL_LIGHT = "oklch(0.85 0.02 192)";
@@ -22,146 +24,80 @@ const id = () => `init-${uid++}`;
 export const slide1Elements: SlideElement[] = [
   // Teal accent bar (right edge, full height)
   {
-    id: id(),
-    type: "shape",
-    zIndex: 0,
-    opacity: 1,
-    rotation: 0,
+    id: id(), type: "shape", zIndex: 0, opacity: 1, rotation: 0,
     placement: { col: 9500, row: 0, colSpan: 500, rowSpan: 5625 },
-    shape: {
-      fill: TEAL,
-      stroke: "transparent",
-      strokeWidth: 0,
-      borderRadius: 0,
-    },
+    shape: { fill: TEAL, stroke: "transparent", strokeWidth: 0, borderRadius: 0 },
   },
   // Eyebrow "Q3 · FY26"
   {
-    id: id(),
-    type: "text",
-    zIndex: 1,
-    opacity: 1,
-    rotation: 0,
+    id: id(), type: "text", zIndex: 1, opacity: 1, rotation: 0,
     placement: { col: 500, row: 500, colSpan: 2500, rowSpan: 350 },
     text: {
       content: "Q3 · FY26",
-      fontSize: 12,
-      fontWeight: 700,
-      fontStyle: "normal",
-      textDecoration: "none",
-      textAlign: "left",
-      color: TEAL,
-      fontFamily: "mono",
-      letterSpacing: "0.25em",
+      fontSize: 12, fontWeight: 700, fontStyle: "normal",
+      textDecoration: "none", textAlign: "left",
+      color: TEAL, fontFamily: "mono", letterSpacing: "0.25em",
     },
   },
   // Main headline
   {
-    id: id(),
-    type: "text",
-    zIndex: 1,
-    opacity: 1,
-    rotation: 0,
+    id: id(), type: "text", zIndex: 1, opacity: 1, rotation: 0,
     placement: { col: 500, row: 1100, colSpan: 8700, rowSpan: 2000 },
     text: {
-      content: "Strategy\nReview",
-      fontSize: 72,
-      fontWeight: 800,
-      fontStyle: "normal",
-      textDecoration: "none",
-      textAlign: "left",
-      color: INK,
-      lineHeight: 0.95,
+      content: "Strategy\nReview blah balh",
+      fontSize: 72, fontWeight: 800, fontStyle: "normal",
+      textDecoration: "none", textAlign: "left",
+      color: INK, lineHeight: 0.95,
     },
   },
   // Subtitle
   {
-    id: id(),
-    type: "text",
-    zIndex: 1,
-    opacity: 1,
-    rotation: 0,
+    id: id(), type: "text", zIndex: 1, opacity: 1, rotation: 0,
     placement: { col: 500, row: 3300, colSpan: 7000, rowSpan: 900 },
     text: {
-      content:
-        "Aligning Q4 priorities across product, sales, and operations — what's working, what's next.",
-      fontSize: 18,
-      fontWeight: 400,
-      fontStyle: "normal",
-      textDecoration: "none",
-      textAlign: "left",
-      color: MUTED,
-      lineHeight: 1.4,
+      content: "Aligning Q4 priorities across product, sales, and operations — what's working, what's next.",
+      fontSize: 18, fontWeight: 400, fontStyle: "normal",
+      textDecoration: "none", textAlign: "left",
+      color: MUTED, lineHeight: 1.4,
     },
   },
   // Avatar circle
   {
-    id: id(),
-    type: "shape",
-    zIndex: 1,
-    opacity: 1,
-    rotation: 0,
+    id: id(), type: "shape", zIndex: 1, opacity: 1, rotation: 0,
     placement: { col: 500, row: 4600, colSpan: 430, rowSpan: 430 },
-    shape: {
-      fill: BLUE,
-      stroke: "transparent",
-      strokeWidth: 0,
-      borderRadius: 999,
-    },
+    shape: { fill: BLUE, stroke: "transparent", strokeWidth: 0, borderRadius: 999 },
   },
   // Avatar initials
   {
-    id: id(),
-    type: "text",
-    zIndex: 2,
-    opacity: 1,
-    rotation: 0,
+    id: id(), type: "text", zIndex: 2, opacity: 1, rotation: 0,
     placement: { col: 500, row: 4600, colSpan: 430, rowSpan: 430 },
     text: {
       content: "AK",
-      fontSize: 12,
-      fontWeight: 700,
-      fontStyle: "normal",
-      textDecoration: "none",
-      textAlign: "center",
+      fontSize: 12, fontWeight: 700, fontStyle: "normal",
+      textDecoration: "none", textAlign: "center",
       color: "white",
     },
   },
   // Name
   {
-    id: id(),
-    type: "text",
-    zIndex: 1,
-    opacity: 1,
-    rotation: 0,
+    id: id(), type: "text", zIndex: 1, opacity: 1, rotation: 0,
     placement: { col: 1100, row: 4600, colSpan: 3000, rowSpan: 350 },
     text: {
       content: "Avery Kim",
-      fontSize: 13,
-      fontWeight: 700,
-      fontStyle: "normal",
-      textDecoration: "none",
-      textAlign: "left",
+      fontSize: 13, fontWeight: 700, fontStyle: "normal",
+      textDecoration: "none", textAlign: "left",
       color: INK,
     },
   },
   // Role
   {
-    id: id(),
-    type: "text",
-    zIndex: 1,
-    opacity: 1,
-    rotation: 0,
+    id: id(), type: "text", zIndex: 1, opacity: 1, rotation: 0,
     placement: { col: 1100, row: 4950, colSpan: 3000, rowSpan: 350 },
     text: {
-      content: "Head of Strategy",
-      fontSize: 11,
-      fontWeight: 400,
-      fontStyle: "normal",
-      textDecoration: "none",
-      textAlign: "left",
-      color: MUTED,
-      fontFamily: "mono",
+      content: "Head of Strategy YESSIREIEIIRE",
+      fontSize: 11, fontWeight: 400, fontStyle: "normal",
+      textDecoration: "none", textAlign: "left",
+      color: MUTED, fontFamily: "mono",
     },
   },
 ];
@@ -171,139 +107,79 @@ export const slide1Elements: SlideElement[] = [
 export const slide2Elements: SlideElement[] = [
   // Section label
   {
-    id: id(),
-    type: "text",
-    zIndex: 1,
-    opacity: 1,
-    rotation: 0,
+    id: id(), type: "text", zIndex: 1, opacity: 1, rotation: 0,
     placement: { col: 500, row: 500, colSpan: 4000, rowSpan: 350 },
     text: {
       content: "By the Numbers",
-      fontSize: 11,
-      fontWeight: 400,
-      fontStyle: "normal",
-      textDecoration: "none",
-      textAlign: "left",
-      color: MUTED,
-      fontFamily: "mono",
-      letterSpacing: "0.05em",
+      fontSize: 11, fontWeight: 400, fontStyle: "normal",
+      textDecoration: "none", textAlign: "left",
+      color: MUTED, fontFamily: "mono", letterSpacing: "0.05em",
     },
   },
   // Stat 1 — number
   {
-    id: id(),
-    type: "text",
-    zIndex: 1,
-    opacity: 1,
-    rotation: 0,
+    id: id(), type: "text", zIndex: 1, opacity: 1, rotation: 0,
     placement: { col: 200, row: 1600, colSpan: 3000, rowSpan: 1100 },
     text: {
       content: "+18%",
-      fontSize: 48,
-      fontWeight: 800,
-      fontStyle: "normal",
-      textDecoration: "none",
-      textAlign: "left",
-      color: TEAL,
-      lineHeight: 1,
+      fontSize: 48, fontWeight: 800, fontStyle: "normal",
+      textDecoration: "none", textAlign: "left",
+      color: TEAL, lineHeight: 1,
     },
   },
   // Stat 1 — label
   {
-    id: id(),
-    type: "text",
-    zIndex: 1,
-    opacity: 1,
-    rotation: 0,
+    id: id(), type: "text", zIndex: 1, opacity: 1, rotation: 0,
     placement: { col: 200, row: 2800, colSpan: 3000, rowSpan: 400 },
     text: {
       content: "YOY GROWTH",
-      fontSize: 10,
-      fontWeight: 400,
-      fontStyle: "normal",
-      textDecoration: "none",
-      textAlign: "left",
-      color: MUTED,
-      fontFamily: "mono",
-      letterSpacing: "0.05em",
+      fontSize: 10, fontWeight: 400, fontStyle: "normal",
+      textDecoration: "none", textAlign: "left",
+      color: MUTED, fontFamily: "mono", letterSpacing: "0.05em",
     },
   },
   // Stat 2 — number
   {
-    id: id(),
-    type: "text",
-    zIndex: 1,
-    opacity: 1,
-    rotation: 0,
+    id: id(), type: "text", zIndex: 1, opacity: 1, rotation: 0,
     placement: { col: 3700, row: 1600, colSpan: 3000, rowSpan: 1100 },
     text: {
       content: "2.4M",
-      fontSize: 48,
-      fontWeight: 800,
-      fontStyle: "normal",
-      textDecoration: "none",
-      textAlign: "left",
-      color: TEAL,
-      lineHeight: 1,
+      fontSize: 48, fontWeight: 800, fontStyle: "normal",
+      textDecoration: "none", textAlign: "left",
+      color: TEAL, lineHeight: 1,
     },
   },
   // Stat 2 — label
   {
-    id: id(),
-    type: "text",
-    zIndex: 1,
-    opacity: 1,
-    rotation: 0,
+    id: id(), type: "text", zIndex: 1, opacity: 1, rotation: 0,
     placement: { col: 3700, row: 2800, colSpan: 3000, rowSpan: 400 },
     text: {
       content: "ACTIVE USERS",
-      fontSize: 10,
-      fontWeight: 400,
-      fontStyle: "normal",
-      textDecoration: "none",
-      textAlign: "left",
-      color: MUTED,
-      fontFamily: "mono",
-      letterSpacing: "0.05em",
+      fontSize: 10, fontWeight: 400, fontStyle: "normal",
+      textDecoration: "none", textAlign: "left",
+      color: MUTED, fontFamily: "mono", letterSpacing: "0.05em",
     },
   },
   // Stat 3 — number
   {
-    id: id(),
-    type: "text",
-    zIndex: 1,
-    opacity: 1,
-    rotation: 0,
+    id: id(), type: "text", zIndex: 1, opacity: 1, rotation: 0,
     placement: { col: 7200, row: 1600, colSpan: 2600, rowSpan: 1100 },
     text: {
       content: "94%",
-      fontSize: 48,
-      fontWeight: 800,
-      fontStyle: "normal",
-      textDecoration: "none",
-      textAlign: "left",
-      color: TEAL,
-      lineHeight: 1,
+      fontSize: 48, fontWeight: 800, fontStyle: "normal",
+      textDecoration: "none", textAlign: "left",
+      color: TEAL, lineHeight: 1,
     },
   },
   // Stat 3 — label
   {
-    id: id(),
-    type: "text",
-    zIndex: 1,
-    opacity: 1,
-    rotation: 0,
+    id: id(), type: "text", zIndex: 1, opacity: 1, rotation: 0,
     placement: { col: 7200, row: 2800, colSpan: 2600, rowSpan: 400 },
     text: {
       content: "RETENTION",
-      fontSize: 10,
-      fontWeight: 400,
-      fontStyle: "normal",
-      textDecoration: "none",
-      textAlign: "left",
-      color: MUTED,
-      fontFamily: "mono",
-      letterSpacing: "0.05em",
+      fontSize: 10, fontWeight: 400, fontStyle: "normal",
+      textDecoration: "none", textAlign: "left",
+      color: MUTED, fontFamily: "mono", letterSpacing: "0.05em",
     },
   },
 ];
@@ -311,37 +187,22 @@ export const slide2Elements: SlideElement[] = [
 // ── Slide 3: Market Landscape (ingredient — stays blank) ──────────────────────
 export const slide3Elements: SlideElement[] = [
   {
-    id: id(),
-    type: "text",
-    zIndex: 1,
-    opacity: 1,
-    rotation: 0,
+    id: id(), type: "text", zIndex: 1, opacity: 1, rotation: 0,
     placement: { col: 500, row: 500, colSpan: 5000, rowSpan: 500 },
     text: {
       content: "Market Landscape",
-      fontSize: 14,
-      fontWeight: 600,
-      fontStyle: "normal",
-      textDecoration: "none",
-      textAlign: "left",
-      color: MUTED,
-      fontFamily: "mono",
+      fontSize: 14, fontWeight: 600, fontStyle: "normal",
+      textDecoration: "none", textAlign: "left",
+      color: MUTED, fontFamily: "mono",
     },
   },
   {
-    id: id(),
-    type: "text",
-    zIndex: 1,
-    opacity: 0.45,
-    rotation: 0,
+    id: id(), type: "text", zIndex: 1, opacity: 0.45, rotation: 0,
     placement: { col: 2000, row: 2000, colSpan: 6000, rowSpan: 1500 },
     text: {
       content: "Content to be added",
-      fontSize: 24,
-      fontWeight: 400,
-      fontStyle: "normal",
-      textDecoration: "none",
-      textAlign: "center",
+      fontSize: 24, fontWeight: 400, fontStyle: "normal",
+      textDecoration: "none", textAlign: "center",
       color: MUTED,
     },
   },
@@ -359,21 +220,13 @@ const barPcts = [28, 42, 38, 55, 61, 72, 68, 84];
 export const slide4Elements: SlideElement[] = [
   // Section label
   {
-    id: id(),
-    type: "text",
-    zIndex: 1,
-    opacity: 1,
-    rotation: 0,
+    id: id(), type: "text", zIndex: 1, opacity: 1, rotation: 0,
     placement: { col: 500, row: 500, colSpan: 5000, rowSpan: 350 },
     text: {
       content: "Growth Trajectory",
-      fontSize: 11,
-      fontWeight: 400,
-      fontStyle: "normal",
-      textDecoration: "none",
-      textAlign: "left",
-      color: MUTED,
-      fontFamily: "mono",
+      fontSize: 11, fontWeight: 400, fontStyle: "normal",
+      textDecoration: "none", textAlign: "left",
+      color: MUTED, fontFamily: "mono",
     },
   },
   // 8 chart bars
@@ -382,11 +235,7 @@ export const slide4Elements: SlideElement[] = [
     const colStart = 500 + i * (barW + gap);
     const rowStart = chartBottom - barHeight;
     return {
-      id: id(),
-      type: "shape" as const,
-      zIndex: 1,
-      opacity: 1,
-      rotation: 0,
+      id: id(), type: "shape" as const, zIndex: 1, opacity: 1, rotation: 0,
       placement: {
         col: colStart,
         row: rowStart,
@@ -413,63 +262,36 @@ const bets = [
 export const slide5Elements: SlideElement[] = [
   // Section label
   {
-    id: id(),
-    type: "text",
-    zIndex: 1,
-    opacity: 1,
-    rotation: 0,
+    id: id(), type: "text", zIndex: 1, opacity: 1, rotation: 0,
     placement: { col: 500, row: 500, colSpan: 5000, rowSpan: 350 },
     text: {
       content: "Three Bets for Q4",
-      fontSize: 11,
-      fontWeight: 400,
-      fontStyle: "normal",
-      textDecoration: "none",
-      textAlign: "left",
-      color: MUTED,
-      fontFamily: "mono",
+      fontSize: 11, fontWeight: 400, fontStyle: "normal",
+      textDecoration: "none", textAlign: "left",
+      color: MUTED, fontFamily: "mono",
     },
   },
   // 3 numbered items
   ...bets.flatMap((bet, i) => [
     // Number
     {
-      id: id(),
-      type: "text" as const,
-      zIndex: 1,
-      opacity: 1,
-      rotation: 0,
+      id: id(), type: "text" as const, zIndex: 1, opacity: 1, rotation: 0,
       placement: { col: 500, row: 1400 + i * 1100, colSpan: 500, rowSpan: 700 },
       text: {
         content: `${i + 1}`,
-        fontSize: 20,
-        fontWeight: 800,
-        fontStyle: "normal" as const,
-        textDecoration: "none" as const,
-        textAlign: "left" as const,
+        fontSize: 20, fontWeight: 800, fontStyle: "normal" as const,
+        textDecoration: "none" as const, textAlign: "left" as const,
         color: TEAL,
       },
     },
     // Text
     {
-      id: id(),
-      type: "text" as const,
-      zIndex: 1,
-      opacity: 1,
-      rotation: 0,
-      placement: {
-        col: 1200,
-        row: 1400 + i * 1100,
-        colSpan: 7800,
-        rowSpan: 700,
-      },
+      id: id(), type: "text" as const, zIndex: 1, opacity: 1, rotation: 0,
+      placement: { col: 1200, row: 1400 + i * 1100, colSpan: 7800, rowSpan: 700 },
       text: {
         content: bet,
-        fontSize: 20,
-        fontWeight: 600,
-        fontStyle: "normal" as const,
-        textDecoration: "none" as const,
-        textAlign: "left" as const,
+        fontSize: 20, fontWeight: 600, fontStyle: "normal" as const,
+        textDecoration: "none" as const, textAlign: "left" as const,
         color: INK,
       },
     },
@@ -479,38 +301,23 @@ export const slide5Elements: SlideElement[] = [
 // ── Slide 6: Closing ──────────────────────────────────────────────────────────
 export const slide6Elements: SlideElement[] = [
   {
-    id: id(),
-    type: "text",
-    zIndex: 1,
-    opacity: 1,
-    rotation: 0,
+    id: id(), type: "text", zIndex: 1, opacity: 1, rotation: 0,
     placement: { col: 500, row: 1800, colSpan: 9000, rowSpan: 1400 },
     text: {
       content: "Let's build Q4.",
-      fontSize: 48,
-      fontWeight: 800,
-      fontStyle: "normal",
-      textDecoration: "none",
-      textAlign: "center",
+      fontSize: 48, fontWeight: 800, fontStyle: "normal",
+      textDecoration: "none", textAlign: "center",
       color: INK,
     },
   },
   {
-    id: id(),
-    type: "text",
-    zIndex: 1,
-    opacity: 1,
-    rotation: 0,
+    id: id(), type: "text", zIndex: 1, opacity: 1, rotation: 0,
     placement: { col: 500, row: 3400, colSpan: 9000, rowSpan: 500 },
     text: {
       content: "— the team",
-      fontSize: 12,
-      fontWeight: 400,
-      fontStyle: "normal",
-      textDecoration: "none",
-      textAlign: "center",
-      color: MUTED,
-      fontFamily: "mono",
+      fontSize: 12, fontWeight: 400, fontStyle: "normal",
+      textDecoration: "none", textAlign: "center",
+      color: MUTED, fontFamily: "mono",
     },
   },
 ];
@@ -523,4 +330,62 @@ export const SLIDE_ELEMENTS: Record<string, SlideElement[]> = {
   n4: slide4Elements,
   n5: slide5Elements,
   n6: slide6Elements,
+};
+
+// ── IR conversion ─────────────────────────────────────────────────────────────
+
+export function elementToLeaf(el: SlideElement): LeafNode {
+  let block: ContentBlock;
+  if (el.type === "text" && el.text) {
+    const style: TextBlockStyle = {
+      fontSize:       el.text.fontSize,
+      fontWeight:     el.text.fontWeight,
+      fontStyle:      el.text.fontStyle,
+      textDecoration: el.text.textDecoration,
+      textAlign:      el.text.textAlign,
+      color:          el.text.color,
+      fontFamily:     el.text.fontFamily,
+      lineHeight:     el.text.lineHeight,
+      letterSpacing:  el.text.letterSpacing,
+    };
+    block = { role: "text", text: el.text.content, style };
+  } else if (el.type === "shape" && el.shape) {
+    const style: ShapeBlockStyle = {
+      fill:         el.shape.fill,
+      stroke:       el.shape.stroke,
+      strokeWidth:  el.shape.strokeWidth,
+      borderRadius: el.shape.borderRadius,
+    };
+    block = { role: "shape", style };
+  } else {
+    block = { role: "image", src: el.src ?? "", style: { objectFit: "cover" } };
+  }
+  return {
+    kind:      "leaf",
+    id:        el.id,
+    placement: el.placement,
+    block,
+    zIndex:    el.zIndex,
+    opacity:   el.opacity,
+    rotation:  el.rotation,
+  };
+}
+
+export function makeRootStack(slideId: string, elements: SlideElement[]): LayoutNode {
+  return {
+    kind:     "stack",
+    id:       `root-${slideId}`,
+    dir:      "col",
+    gap:      0,
+    children: elements.map(elementToLeaf),
+  };
+}
+
+export const INITIAL_IR_SLIDES: Record<string, LayoutNode> = {
+  n1: makeRootStack("n1", slide1Elements),
+  n2: makeRootStack("n2", slide2Elements),
+  n3: makeRootStack("n3", slide3Elements),
+  n4: makeRootStack("n4", slide4Elements),
+  n5: makeRootStack("n5", slide5Elements),
+  n6: makeRootStack("n6", slide6Elements),
 };

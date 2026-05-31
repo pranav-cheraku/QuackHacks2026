@@ -19,9 +19,6 @@ interface Props {
   onToggleMinimap: () => void;
 }
 
-// Floating left rail — canvas navigation/view tools only (per graph_view_spec;
-// authoring lives in Slides View). Outline + Focus + Status filter are the
-// spec's "map"; Auto-tidy and Minimap are navigation aids.
 export function GraphToolRail({
   canvasMode,
   onSetMode,

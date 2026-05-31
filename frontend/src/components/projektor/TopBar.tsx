@@ -117,8 +117,6 @@ export function TopBar({
       {/* Left: logo · dashboard · current presentation */}
       <div className="flex items-center gap-2.5 min-w-0">
         <Logo />
-        {/* TODO: /dashboard is a temporary placeholder route — wire to the real
-            "all presentations" view once it exists. */}
         <Link
           to="/dashboard"
           className="flex items-center gap-1.5 px-2.5 py-1.5 text-[13px] font-semibold rounded-md text-ink hover:bg-canvas/70 transition-colors"

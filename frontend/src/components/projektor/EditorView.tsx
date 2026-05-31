@@ -1,32 +1,57 @@
 import { useState, useEffect, useRef, useCallback, useReducer } from "react";
+import { loadSlides, saveSlide, seedSlides, deleteSlideDoc } from "@/lib/firestore-slides";
 import type React from "react";
 import {
-  Undo2, Redo2, Bold, Italic, Underline,
+  Undo2, Redo2, Italic, Underline,
   AlignLeft, AlignCenter, AlignRight,
   Type, ImageIcon, Square, ChevronDown,
-  Plus, Sparkles, CheckCircle2, Loader2,
+  Plus, Sparkles,
   Paperclip, Mic, Send, LayoutTemplate,
-  Layers, SlidersHorizontal, Grid3x3, Trash2, Copy,
+  Layers, Grid3x3, Trash2, Copy,
 } from "lucide-react";
-import { INITIAL_NODES } from "@/lib/projektor-data";
-import type { SlideNode } from "@/lib/projektor-data";
+import { INITIAL_NODES, INITIAL_EDGES } from "@/lib/projektor-data";
+import type { SlideNode, Edge } from "@/lib/projektor-data";
 import { SlideThumb } from "./SlideThumb";
 import { GridOverlay } from "./GridOverlay";
-import { makeTextElement, makeShapeElement, makeImageElement, nextId } from "@/lib/slide-model";
-import type { SlideElement, TextStyle } from "@/lib/slide-model";
+import {
+  collectLeaves, applySlideEditOp, emptyRoot, deepCloneWithNewIds,
+  makeTextLeaf, makeShapeLeaf, makeImageLeaf, makeLeafId,
+} from "@/lib/ir";
+import type { LayoutNode, LeafNode, SlideEditOp, TextBlockStyle, ShapeBlockStyle } from "@/lib/ir";
 import { gridToCSS, GRID_COLS, GRID_ROWS, snap, SNAP_STEP } from "@/lib/grid";
 import type { GridPlacement } from "@/lib/grid";
-import { SLIDE_ELEMENTS } from "@/lib/initial-slides";
+import { INITIAL_IR_SLIDES } from "@/lib/initial-slides";
+import { SLIDE_CANDIDATES } from "@/lib/slide-candidates";
+import { ZOOM_STEP, zoomBy } from "@/lib/viewport";
+
+// ── Module-level helpers / constants ─────────────────────────────────────────
+function toHex(c?: string): string {
+  if (!c) return "#000000";
+  if (c.startsWith("#")) return c;
+  return "#000000"; // oklch/hsl fall back; CSS still renders the real color via style=
+}
+
+const WEIGHT_OPTIONS = [
+  { label: "Thin",     value: 300 },
+  { label: "Regular",  value: 400 },
+  { label: "Medium",   value: 500 },
+  { label: "SemiBold", value: 600 },
+  { label: "Bold",     value: 700 },
+  { label: "ExtraBold",value: 800 },
+] as const;
 
 // ─── Undo/redo history ────────────────────────────────────────────────────────
 type History = { past: SlideNode[][]; present: SlideNode[]; future: SlideNode[][] };
 type HistoryAction =
   | { type: "commit"; updater: (s: SlideNode[]) => SlideNode[] }
+  | { type: "init";   slides: SlideNode[] }
   | { type: "undo" }
   | { type: "redo" };
 
 function historyReducer(state: History, action: HistoryAction): History {
   switch (action.type) {
+    case "init":
+      return { past: [], present: action.slides, future: [] };
     case "commit":
       return {
         past: [...state.past.slice(-49), state.present],
@@ -50,6 +75,16 @@ function historyReducer(state: History, action: HistoryAction): History {
   }
 }
 
+interface Props {
+  startNodeId: string | null;
+  zoom: number;
+  setZoom: (zoom: number) => void;
+  isGridVisible: boolean;
+  toggleGrid: () => void;
+}
+type RightTab = "agent" | "design" | "arrange";
+type HandlePos = "n" | "ne" | "e" | "se" | "s" | "sw" | "w" | "nw";
+
 function isTextEditingTarget(target: EventTarget | null): boolean {
   if (!(target instanceof HTMLElement)) return false;
   const tag = target.tagName;
@@ -70,118 +105,200 @@ function makeSceneId(): string {
   return `n-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
 }
 
-
-type RightTab = "agent" | "design" | "arrange";
-type HandlePos = "n" | "ne" | "e" | "se" | "s" | "sw" | "w" | "nw";
-interface Props { startNodeId: string | null; initialNodes?: import('@/lib/projektor-data').SlideNode[]; }
-
 // ─── EditorView ───────────────────────────────────────────────────────────────
-export function EditorView({ startNodeId, initialNodes }: Props) {
+export function EditorView({
+  startNodeId,
+  zoom,
+  setZoom,
+  isGridVisible,
+  toggleGrid,
+}: Props) {
   const [{ past, present: slides, future }, dispatch] = useReducer(
     historyReducer,
     null,
     (): History => ({
       past: [],
-      present: (initialNodes ?? INITIAL_NODES).map((n) => ({ ...n, elements: SLIDE_ELEMENTS[n.id] ?? n.elements ?? [] })),
+      present: INITIAL_NODES.map((n) => ({
+        ...n,
+        root:          INITIAL_IR_SLIDES[n.id] ?? emptyRoot(n.id),
+        candidates:    SLIDE_CANDIDATES[n.id]  ?? [],
+        activeDesignId: SLIDE_CANDIDATES[n.id]?.[0]?.id ?? null,
+      })),
       future: [],
     })
   );
   const canUndo = past.length > 0;
   const canRedo = future.length > 0;
 
+  // GRAPH SYNC: narrative edges live alongside slides in deck state. Graph View renders
+  // these as directed connectors between nodes; Slides View currently ignores them.
+  // Both views must read from this single edges state — no parallel copy elsewhere.
+  const [edges, setEdges] = useState<Edge[]>(INITIAL_EDGES);
+
+  const [firestoreReady, setFirestoreReady] = useState(false);
+
+  // On mount: load slides from Firestore. If the collection is empty (first run),
+  // seed it from the static defaults and use those.
+  useEffect(() => {
+    loadSlides().then(async (remote) => {
+      if (remote) {
+        dispatch({ type: "init", slides: remote });
+        setActiveId(remote[0]?.id ?? "n1");
+      } else {
+        const defaults = INITIAL_NODES.map((n) => ({
+          ...n,
+          root:          INITIAL_IR_SLIDES[n.id] ?? emptyRoot(n.id),
+          candidates:    SLIDE_CANDIDATES[n.id]  ?? [],
+          activeDesignId: SLIDE_CANDIDATES[n.id]?.[0]?.id ?? null,
+        }));
+        await seedSlides(defaults);
+        dispatch({ type: "init", slides: defaults });
+      }
+      setFirestoreReady(true);
+    }).catch((err) => {
+      console.error("[firestore] Failed to load slides:", err);
+      setFirestoreReady(true); // fall back to in-memory defaults
+    });
+  }, []);
+
   const [activeId, setActiveId] = useState(startNodeId ?? "n1");
   const [selectedElId, setSelectedElId] = useState<string | null>(null);
   const [editingElId, setEditingElId] = useState<string | null>(null);
+  const [railSelectionActive, setRailSelectionActive] = useState(true);
   const [rightTab, setRightTab] = useState<RightTab>("agent");
-  const [showGrid, setShowGrid] = useState(false);
   const slideRef = useRef<HTMLDivElement>(null);
+  const lastStartNodeIdRef = useRef<string | null>(startNodeId);
 
   const activeSlide = slides.find((s) => s.id === activeId) ?? slides[0];
-  const selectedEl = activeSlide?.elements.find((e) => e.id === selectedElId) ?? null;
+  const selectedLeaf = collectLeaves(activeSlide?.root ?? emptyRoot("")).find((l) => l.id === selectedElId) ?? null;
+
+  // Type-narrowed helpers for toolbar/ArrangePanel
+  const textBlock  = selectedLeaf?.block.role === "text"  ? selectedLeaf.block : null;
+  const shapeBlock = selectedLeaf?.block.role === "shape" ? selectedLeaf.block : null;
+
+  useEffect(() => {
+    if (startNodeId === lastStartNodeIdRef.current) return;
+    lastStartNodeIdRef.current = startNodeId;
+    if (!startNodeId || !slides.some((s) => s.id === startNodeId)) return;
+    setActiveId(startNodeId);
+    setSelectedElId(null);
+    setEditingElId(null);
+    setRailSelectionActive(true);
+  }, [startNodeId, slides]);
 
   // ── Helpers ──────────────────────────────────────────────────────────────
   const updateSlide = useCallback(
     (slideId: string, fn: (s: SlideNode) => SlideNode) =>
-      dispatch({ type: "commit", updater: (prev) => prev.map((s) => (s.id === slideId ? fn(s) : s)) }),
+      dispatch({
+        type: "commit",
+        updater: (prev) => prev.map((s) => {
+          if (s.id !== slideId) return s;
+          const next = fn(s);
+          saveSlide(next).catch((err) => console.error("[firestore] saveSlide failed:", err));
+          return next;
+        }),
+      }),
     []
   );
 
   const undo = useCallback(() => dispatch({ type: "undo" }), []);
   const redo = useCallback(() => dispatch({ type: "redo" }), []);
 
-  const updateEl = useCallback(
-    (elId: string, fn: (e: SlideElement) => SlideElement) =>
-      updateSlide(activeId, (s) => ({
-        ...s,
-        elements: s.elements.map((e) => (e.id === elId ? fn(e) : e)),
-      })),
+  const dispatchOp = useCallback(
+    (op: SlideEditOp) =>
+      updateSlide(activeId, (s) => ({ ...s, root: applySlideEditOp(s.root!, op) })),
     [activeId, updateSlide]
   );
 
-  const addEl = (el: SlideElement) => {
-    updateSlide(activeId, (s) => ({ ...s, elements: [...s.elements, el] }));
-    setSelectedElId(el.id);
+  const addLeaf = useCallback((leaf: LeafNode) => {
+    const parentId = activeSlide.root!.id;
+    const index = collectLeaves(activeSlide.root!).length;
+    dispatchOp({ op: "addLeaf", parent: parentId, leaf, index });
+    setSelectedElId(leaf.id);
     setEditingElId(null);
-  };
+    setRailSelectionActive(false);
+  }, [activeSlide, dispatchOp]);
 
-  const deleteEl = useCallback(
+  const deleteLeaf = useCallback(
     (id: string) => {
-      updateSlide(activeId, (s) => ({
-        ...s,
-        elements: s.elements.filter((e) => e.id !== id),
-      }));
+      dispatchOp({ op: "removeLeaf", nodeId: id });
       setSelectedElId(null);
       setEditingElId(null);
     },
-    [activeId, updateSlide]
+    [dispatchOp]
   );
 
-  const duplicateEl = useCallback(
+  const duplicateLeaf = useCallback(
     (id: string) => {
-      const el = activeSlide.elements.find((e) => e.id === id);
-      if (!el) return;
-      const copy: SlideElement = {
-        ...el,
-        id: nextId(),
+      const leaf = collectLeaves(activeSlide.root!).find((l) => l.id === id);
+      if (!leaf) return;
+      const copy: LeafNode = {
+        ...leaf,
+        id: makeLeafId(),
         placement: {
-          ...el.placement,
-          col: Math.min(GRID_COLS - el.placement.colSpan, el.placement.col + SNAP_STEP * 3),
-          row: Math.min(GRID_ROWS - el.placement.rowSpan, el.placement.row + SNAP_STEP * 3),
+          ...leaf.placement,
+          col: Math.min(GRID_COLS - leaf.placement.colSpan, leaf.placement.col + SNAP_STEP * 3),
+          row: Math.min(GRID_ROWS - leaf.placement.rowSpan, leaf.placement.row + SNAP_STEP * 3),
         },
       };
-      updateSlide(activeId, (s) => ({ ...s, elements: [...s.elements, copy] }));
+      const parentId = activeSlide.root!.id;
+      dispatchOp({ op: "addLeaf", parent: parentId, leaf: copy, index: collectLeaves(activeSlide.root!).length });
       setSelectedElId(copy.id);
+      setRailSelectionActive(false);
     },
-    [activeId, activeSlide, updateSlide]
+    [activeSlide, dispatchOp]
   );
 
-  const addSlide = () => {
+  const addSlide = useCallback(() => {
+    // Stable unique ID — the graph keys nodes on this; never reassign after creation.
+    const id = makeSceneId();
     const newSlide: SlideNode = {
-      id: `n-${Date.now()}`,
+      id,
       index: slides.length + 1,
       title: "New Slide",
-      kind: "title",
-      status: "draft",
-      x: 0, y: 0,
-      state: "rendered",
-      thumb: "title",
-      elements: [],
+      x: 0, y: 0, rotation: 0,
+      state: "rendered" as const,
+      components: [],
+      thumb: "title" as const,
+      root: emptyRoot(id),
       candidates: [],
       activeDesignId: null,
+      kind: "title" as const,
+      status: "draft" as const,
     };
-    dispatch({ type: "commit", updater: (prev) => reindexSlides([...prev, newSlide]) });
-    setActiveId(newSlide.id);
-    setSelectedElId(null);
-  };
-
-  const deleteSlide = (id: string) => {
-    if (slides.length <= 1) return;
-    const remaining = reindexSlides(slides.filter((s) => s.id !== id));
-    dispatch({ type: "commit", updater: () => remaining });
-    if (activeId === id) setActiveId(remaining[0]?.id ?? "");
+    // GRAPH SYNC: adding a slide = adding a node. The graph reads from the same slides
+    // state and will display it as a new node without any extra wiring.
+    dispatch({ type: "commit", updater: (prev) => [...prev, newSlide] });
+    saveSlide(newSlide).catch((err) => console.error("[firestore] saveSlide failed:", err));
+    setActiveId(id);
     setSelectedElId(null);
     setEditingElId(null);
-  };
+    setRailSelectionActive(true);
+  }, [slides.length]);
+
+  const deleteSlide = useCallback((id: string) => {
+    if (slides.length <= 1) return; // never remove the last scene
+    const idx = slides.findIndex((s) => s.id === id);
+    if (idx === -1) return;
+    const sibling = slides[idx + 1] ?? slides[idx - 1];
+    // Navigate before the state update so activeId is never left pointing at a removed scene
+    setActiveId(sibling.id);
+    setSelectedElId(null);
+    setEditingElId(null);
+    setRailSelectionActive(true);
+    // GRAPH SYNC: deleting a slide = removing a node. Prune edges referencing this scene
+    // now so the graph never encounters dangling connectors when it reads this state.
+    dispatch({ type: "commit", updater: (prev) => reindexSlides(prev.filter((s) => s.id !== id)) });
+    setEdges((prev) => prev.filter((e) => e.from !== id && e.to !== id));
+    deleteSlideDoc(id).catch((err) => console.error("[firestore] deleteSlideDoc failed:", err));
+  }, [slides]);
+
+  const selectSlideFromRail = useCallback((id: string) => {
+    setActiveId(id);
+    setSelectedElId(null);
+    setEditingElId(null);
+    setRailSelectionActive(true);
+  }, []);
 
   // ── Keyboard shortcuts ────────────────────────────────────────────────────
   useEffect(() => {
@@ -192,31 +309,95 @@ export function EditorView({ startNodeId, initialNodes }: Props) {
       if ((e.metaKey || e.ctrlKey) && (e.key === "y" || (e.key === "z" && e.shiftKey))) {
         e.preventDefault(); redo(); return;
       }
+      if (isTextEditingTarget(e.target)) return;
       if (editingElId) return;
+      if ((e.key === "Delete" || e.key === "Backspace") && railSelectionActive && !selectedElId) {
+        if (e.repeat) return;
+        e.preventDefault();
+        deleteSlide(activeId);
+        return;
+      }
       if (!selectedElId) return;
-      const tag = (e.target as HTMLElement).tagName;
-      if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT") return;
-      if (e.key === "Delete" || e.key === "Backspace") deleteEl(selectedElId);
+      if (e.key === "Delete" || e.key === "Backspace") {
+        e.preventDefault();
+        deleteLeaf(selectedElId);
+      }
       if ((e.metaKey || e.ctrlKey) && e.key === "d") {
         e.preventDefault();
-        duplicateEl(selectedElId);
+        duplicateLeaf(selectedElId);
       }
       if (e.key === "Escape") { setEditingElId(null); setSelectedElId(null); }
     };
     window.addEventListener("keydown", handler);
     return () => window.removeEventListener("keydown", handler);
-  }, [selectedElId, editingElId, deleteEl, duplicateEl, undo, redo]);
+  }, [activeId, selectedElId, editingElId, railSelectionActive, deleteSlide, deleteLeaf, duplicateLeaf, undo, redo]);
 
-  const commitMove   = (id: string, p: GridPlacement) => updateEl(id, (e) => ({ ...e, placement: p }));
-  const commitResize = (id: string, p: GridPlacement) => updateEl(id, (e) => ({ ...e, placement: p }));
-  const commitText   = (id: string, content: string) => {
-    updateEl(id, (e) => ({ ...e, text: { ...e.text!, content } }));
+  // ── Paste image from clipboard ────────────────────────────────────────────
+  useEffect(() => {
+    const handlePaste = (e: ClipboardEvent) => {
+      // Let native text paste through when a text field has focus
+      const tag = (document.activeElement as HTMLElement | null)?.tagName;
+      if (tag === "TEXTAREA" || tag === "INPUT") return;
+      const items = e.clipboardData?.items;
+      if (!items) return;
+      let file: File | null = null;
+      for (let i = 0; i < items.length; i++) {
+        if (items[i].kind === "file" && items[i].type.startsWith("image/")) {
+          file = items[i].getAsFile();
+          break;
+        }
+      }
+      if (!file) return;
+      e.preventDefault();
+      const src = URL.createObjectURL(file);
+      if (selectedLeaf?.block.role === "image") {
+        dispatchOp({ op: "setImageSrc", nodeId: selectedLeaf.id, src });
+      } else {
+        addLeaf(makeImageLeaf({ block: { role: "image", src }, placement: { col: 3000, row: 1688, colSpan: 4000, rowSpan: 2250 } }));
+      }
+    };
+    window.addEventListener("paste", handlePaste);
+    return () => window.removeEventListener("paste", handlePaste);
+  }, [selectedLeaf, dispatchOp, addLeaf]);
+
+  const commitMove   = (id: string, p: GridPlacement) => dispatchOp({ op: "setPlacement", nodeId: id, placement: p });
+  const commitResize = (id: string, p: GridPlacement) => dispatchOp({ op: "setPlacement", nodeId: id, placement: p });
+  const commitText   = (id: string, text: string) => {
+    dispatchOp({ op: "setText", nodeId: id, text });
     setEditingElId(null);
   };
-  const bringForward = (id: string) => updateEl(id, (e) => ({ ...e, zIndex: e.zIndex + 1 }));
-  const sendBack     = (id: string) => updateEl(id, (e) => ({ ...e, zIndex: Math.max(0, e.zIndex - 1) }));
+
+  const bringForward = useCallback((id: string) => {
+    const leaves = collectLeaves(activeSlide.root!);
+    const maxZ = leaves.reduce((m, l) => Math.max(m, l.zIndex ?? 0), 0);
+    dispatchOp({ op: "setZIndex", nodeId: id, zIndex: maxZ + 1 });
+  }, [activeSlide.root, dispatchOp]);
+
+  const sendBack = useCallback((id: string) => {
+    const leaves = collectLeaves(activeSlide.root!);
+    const minZ = leaves.reduce((m, l) => Math.min(m, l.zIndex ?? 0), Infinity);
+    dispatchOp({ op: "setZIndex", nodeId: id, zIndex: Math.max(0, minZ - 1) });
+  }, [activeSlide.root, dispatchOp]);
+
+  const applyCandidate = useCallback((candidateId: string) => {
+    updateSlide(activeId, (s) => {
+      const cand = (s.candidates ?? []).find((c) => c.id === candidateId);
+      if (!cand) return s;
+      return { ...s, root: deepCloneWithNewIds(cand.root), activeDesignId: candidateId };
+    });
+    setSelectedElId(null);
+    setEditingElId(null);
+  }, [activeId, updateSlide]);
 
   // ── Render ────────────────────────────────────────────────────────────────
+  if (!firestoreReady) {
+    return (
+      <div className="flex-1 flex items-center justify-center bg-canvas/60">
+        <p className="text-[12px] font-mono text-muted-foreground">Loading slides…</p>
+      </div>
+    );
+  }
+
   return (
     <div
       className="flex-1 flex flex-col min-h-0 bg-chrome"
@@ -231,61 +412,77 @@ export function EditorView({ startNodeId, initialNodes }: Props) {
         <ToolBtn title="Redo (Ctrl+Y)" dimmed={!canRedo} onClick={redo}><Redo2 size={13} /></ToolBtn>
         <Sep />
         <FontSizeControl
-          value={selectedEl?.text?.fontSize}
+          value={textBlock?.style.fontSize}
           onChange={(size) =>
-            selectedEl && updateEl(selectedEl.id, (e) => ({ ...e, text: { ...e.text!, fontSize: size } }))
+            selectedLeaf && dispatchOp({ op: "setStyle", nodeId: selectedLeaf.id, style: { fontSize: size } })
           }
         />
         <Sep />
+        <WeightSelect
+          value={textBlock?.style.fontWeight ?? 400}
+          disabled={!textBlock}
+          onChange={(w) => selectedLeaf && dispatchOp({ op: "setStyle", nodeId: selectedLeaf.id, style: { fontWeight: w } })}
+        />
         <ToolBtn
-          active={selectedEl?.text?.fontWeight === 700}
-          onClick={() => selectedEl && updateEl(selectedEl.id, (e) => ({
-            ...e, text: { ...e.text!, fontWeight: e.text!.fontWeight >= 700 ? 400 : 700 },
-          }))}
-        ><Bold size={12} /></ToolBtn>
-        <ToolBtn
-          active={selectedEl?.text?.fontStyle === "italic"}
-          onClick={() => selectedEl && updateEl(selectedEl.id, (e) => ({
-            ...e, text: { ...e.text!, fontStyle: e.text!.fontStyle === "italic" ? "normal" : "italic" },
-          }))}
+          active={textBlock?.style.fontStyle === "italic"}
+          onClick={() => selectedLeaf && dispatchOp({ op: "setStyle", nodeId: selectedLeaf.id, style: {
+            fontStyle: textBlock?.style.fontStyle === "italic" ? "normal" : "italic",
+          }})}
         ><Italic size={12} /></ToolBtn>
         <ToolBtn
-          active={selectedEl?.text?.textDecoration === "underline"}
-          onClick={() => selectedEl && updateEl(selectedEl.id, (e) => ({
-            ...e, text: { ...e.text!, textDecoration: e.text!.textDecoration === "underline" ? "none" : "underline" },
-          }))}
+          active={textBlock?.style.textDecoration === "underline"}
+          onClick={() => selectedLeaf && dispatchOp({ op: "setStyle", nodeId: selectedLeaf.id, style: {
+            textDecoration: textBlock?.style.textDecoration === "underline" ? "none" : "underline",
+          }})}
         ><Underline size={12} /></ToolBtn>
         <Sep />
         {(["left", "center", "right"] as const).map((align, i) => (
           <ToolBtn
             key={align}
-            active={selectedEl?.text?.textAlign === align}
-            onClick={() => selectedEl && updateEl(selectedEl.id, (e) => ({
-              ...e, text: { ...e.text!, textAlign: align },
-            }))}
+            active={textBlock?.style.textAlign === align}
+            onClick={() => selectedLeaf && dispatchOp({ op: "setStyle", nodeId: selectedLeaf.id, style: { textAlign: align } })}
           >
             {[<AlignLeft size={12} />, <AlignCenter size={12} />, <AlignRight size={12} />][i]}
           </ToolBtn>
         ))}
         <Sep />
-        <ToolBtn title="Add text"  onClick={() => addEl(makeTextElement())}><Type size={12} /></ToolBtn>
-        <ToolBtn title="Add image" onClick={() => addEl(makeImageElement())}><ImageIcon size={12} /></ToolBtn>
-        <ToolBtn title="Add shape" onClick={() => addEl(makeShapeElement())}><Square size={12} /></ToolBtn>
+        {/* ── Per-element color & opacity ── */}
+        <ColorSwatch
+          color={textBlock?.style.color ?? shapeBlock?.style.fill}
+          label={textBlock ? "Text color" : shapeBlock ? "Fill color" : "Color"}
+          onChange={(hex) => {
+            if (!selectedLeaf) return;
+            if (textBlock)  dispatchOp({ op: "setStyle", nodeId: selectedLeaf.id, style: { color: hex } });
+            if (shapeBlock) dispatchOp({ op: "setStyle", nodeId: selectedLeaf.id, style: { fill: hex } });
+          }}
+        />
+        <OpacityInput
+          value={selectedLeaf?.opacity}
+          onChange={(o) => selectedLeaf && dispatchOp({ op: "setOpacity", nodeId: selectedLeaf.id, opacity: o })}
+        />
+        <Sep />
+        <ToolBtn title="Add text"  onClick={() => addLeaf(makeTextLeaf())}><Type size={12} /></ToolBtn>
+        <ToolBtn title="Add image" onClick={() => addLeaf(makeImageLeaf())}><ImageIcon size={12} /></ToolBtn>
+        <ToolBtn title="Add shape" onClick={() => addLeaf(makeShapeLeaf())}><Square size={12} /></ToolBtn>
         <ToolBtn title="Layout"><LayoutTemplate size={12} /></ToolBtn>
         <Sep />
-        {selectedEl && (
+        {selectedLeaf && (
           <>
-            <ToolBtn title="Duplicate (Ctrl+D)" onClick={() => duplicateEl(selectedEl.id)}><Copy size={12} /></ToolBtn>
-            <ToolBtn title="Delete" onClick={() => deleteEl(selectedEl.id)}><Trash2 size={12} /></ToolBtn>
+            <ToolBtn title="Duplicate (Ctrl+D)" onClick={() => duplicateLeaf(selectedLeaf.id)}><Copy size={12} /></ToolBtn>
+            <ToolBtn title="Delete" onClick={() => deleteLeaf(selectedLeaf.id)}><Trash2 size={12} /></ToolBtn>
             <Sep />
           </>
         )}
         <div className="ml-auto">
           <button
-            title={showGrid ? "Hide grid" : "Show grid"}
-            onClick={() => setShowGrid((v) => !v)}
-            className={`w-7 h-7 flex items-center justify-center rounded transition-all ${showGrid ? "text-white" : "text-muted-foreground hover:text-ink"}`}
-            style={showGrid ? { background: "var(--accent-teal)" } : undefined}
+            title={isGridVisible ? "Hide grid" : "Show grid"}
+            onClick={toggleGrid}
+            className={`w-7 h-7 flex items-center justify-center rounded transition-all ${
+              isGridVisible
+                ? "bg-[color:var(--accent-teal)] text-white"
+                : "text-muted-foreground hover:text-ink hover:bg-canvas/60"
+            }`}
+            aria-pressed={isGridVisible}
           >
             <Grid3x3 size={13} />
           </button>
@@ -298,28 +495,59 @@ export function EditorView({ startNodeId, initialNodes }: Props) {
           className="w-[180px] shrink-0 border-r border-border bg-chrome flex flex-col"
           onClick={(e) => e.stopPropagation()}
         >
+          {/* GRAPH SYNC: slides = nodes; the graph keys on slide.id — IDs must be stable + unique.
+               GRAPH SYNC: setActiveId = "focus this node"; graph will reflect the same selection.
+               GRAPH SYNC: the linear order shown here is one path through the graph (the chosen path).
+               Reordering here = choosing a different linearization, not restructuring the graph itself. */}
           <div className="flex-1 overflow-y-auto py-2">
-            {slides.map((s) => (
-              <button
-                key={s.id}
-                onClick={() => { setActiveId(s.id); setSelectedElId(null); setEditingElId(null); }}
-                className={`w-full px-3 py-1.5 flex gap-2.5 items-start text-left transition-all ${
-                  activeId === s.id ? "bg-[color:var(--accent-soft)]" : "hover:bg-canvas/50"
-                }`}
-              >
-                <span className="text-[10px] font-mono text-muted-foreground pt-1 w-4 shrink-0 text-right">{s.index}</span>
+            {slides.map((s) => {
+              const isViewed = activeId === s.id;
+              const isDeleteSelected = isViewed && railSelectionActive && !selectedElId && !editingElId;
+
+              return (
                 <div
-                  className={`flex-1 rounded border overflow-hidden bg-white transition-all ${
-                    activeId === s.id
-                      ? "border-[color:var(--accent-teal)] shadow-[0_0_0_2px_var(--accent-soft)]"
-                      : "border-border"
+                  key={s.id}
+                  role="button"
+                  aria-current={isViewed ? "true" : undefined}
+                  aria-selected={isDeleteSelected}
+                  tabIndex={0}
+                  onClick={() => selectSlideFromRail(s.id)}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter" || e.key === " ") {
+                      e.preventDefault();
+                      selectSlideFromRail(s.id);
+                    }
+                  }}
+                  className={`group relative w-full px-3 py-1.5 flex gap-2.5 items-start text-left transition-all cursor-pointer ${
+                    isDeleteSelected
+                      ? "bg-canvas/80"
+                      : isViewed
+                      ? "bg-canvas/60"
+                      : "hover:bg-canvas/50"
                   }`}
-                  style={{ aspectRatio: "16/9" }}
                 >
-                  <SlideThumb node={s} />
+                  <span
+                    className={`text-[10px] font-mono pt-1 w-4 shrink-0 text-right ${
+                      isDeleteSelected ? "text-ink font-bold" : "text-muted-foreground"
+                    }`}
+                  >
+                    {s.index}
+                  </span>
+                  <div
+                    className={`flex-1 rounded border overflow-hidden bg-white transition-all ${
+                      isDeleteSelected
+                        ? "border-ink shadow-[0_0_0_2px_oklch(0.54_0.105_192_/_0.35)]"
+                        : isViewed
+                        ? "border-[color:var(--accent-teal)]"
+                        : "border-border"
+                    }`}
+                    style={{ aspectRatio: "16/9" }}
+                  >
+                    <SlideThumb node={s} />
+                  </div>
                 </div>
-              </button>
-            ))}
+              );
+            })}
           </div>
           {/* GRAPH SYNC: scene edits (content/layout) mutate the shared slides state so both
                views always project the same source of truth — no separate copy per view. */}
@@ -332,29 +560,17 @@ export function EditorView({ startNodeId, initialNodes }: Props) {
             </button>
             <button
               onClick={() => deleteSlide(activeId)}
-              disabled={
-                slides.length <= 1 ||
-                !!selectedElId ||
-                !!editingElId
-              }
+              disabled={slides.length <= 1 || !railSelectionActive || !!selectedElId || !!editingElId}
               className="w-full py-1.5 flex items-center justify-center gap-1.5 text-[11px] font-medium text-muted-foreground hover:text-red-400 disabled:opacity-40 disabled:hover:text-muted-foreground border border-border rounded hover:bg-canvas/40 transition-all"
               title={
                 slides.length <= 1
                   ? "Cannot delete the last slide"
-                  : !selectedElId && !editingElId
-                    ? "Delete selected slide"
-                    : "Select a slide in the rail to delete it"
+                  : railSelectionActive && !selectedElId && !editingElId
+                  ? "Delete selected slide"
+                  : "Select a slide in the rail to delete it"
               }
             >
               <Trash2 size={12} /> Delete selected
-            </button>
-          </div>
-          <div className="border-t border-border p-2.5">
-            <button
-              onClick={addSlide}
-              className="w-full py-1.5 flex items-center justify-center gap-1.5 text-[11px] font-medium text-muted-foreground hover:text-ink border border-dashed border-border rounded hover:border-[color:var(--accent-teal)] hover:bg-canvas/40 transition-all"
-            >
-              <Plus size={12} /> Add slide
             </button>
           </div>
         </aside>
@@ -362,48 +578,78 @@ export function EditorView({ startNodeId, initialNodes }: Props) {
         {/* ── Canvas ── */}
         <div
           className="flex-1 flex items-center justify-center bg-canvas/60 overflow-auto p-8 min-w-0"
-          onClick={() => { setSelectedElId(null); setEditingElId(null); }}
+          onClick={() => { setSelectedElId(null); setEditingElId(null); setRailSelectionActive(false); }}
+          onWheel={(e) => {
+            if (!e.ctrlKey && !e.metaKey) return;
+            e.preventDefault();
+            setZoom(zoomBy(zoom, e.deltaY < 0 ? ZOOM_STEP : -ZOOM_STEP));
+          }}
         >
-          <div
-            ref={slideRef}
-            className="bg-white rounded-sm shadow-[0_8px_40px_-12px_oklch(0.3_0.01_175/0.3)] relative overflow-hidden shrink-0"
-            style={{ width: 928, height: 522 }}
-            onClick={(e) => e.stopPropagation()}
-          >
-            <GridOverlay visible={showGrid} />
+          <div className="relative shrink-0" style={{ width: 928 * zoom, height: 522 * zoom }}>
+            <div
+              ref={slideRef}
+              className="bg-white rounded-sm shadow-[0_8px_40px_-12px_oklch(0.3_0.01_175/0.3)] relative overflow-hidden"
+              style={{
+                width: 928,
+                height: 522,
+                transform: `scale(${zoom})`,
+                transformOrigin: "top left",
+              }}
+              onClick={(e) => e.stopPropagation()}
+              onDragOver={(e) => { e.preventDefault(); e.stopPropagation(); }}
+              onDrop={(e) => {
+                e.preventDefault();
+                e.stopPropagation();
+                const file = Array.from(e.dataTransfer.files).find((f) => f.type.startsWith("image/")) ?? null;
+                if (!file) return;
+                const src = URL.createObjectURL(file);
+                if (selectedLeaf?.block.role === "image") {
+                  dispatchOp({ op: "setImageSrc", nodeId: selectedLeaf.id, src });
+                } else {
+                  const colSpan = 4000;
+                  const rowSpan = 2250;
+                  const rect = slideRef.current!.getBoundingClientRect();
+                  const col = snap(Math.max(0, Math.min(GRID_COLS - colSpan,
+                    Math.round(((e.clientX - rect.left) / rect.width) * GRID_COLS - colSpan / 2))));
+                  const row = snap(Math.max(0, Math.min(GRID_ROWS - rowSpan,
+                    Math.round(((e.clientY - rect.top) / rect.height) * GRID_ROWS - rowSpan / 2))));
+                  addLeaf(makeImageLeaf({ block: { role: "image", src }, placement: { col, row, colSpan, rowSpan } }));
+                }
+              }}
+            >
+              <GridOverlay visible={isGridVisible} />
 
-            {/* All content comes from the element model */}
-            {[...activeSlide.elements]
-              .sort((a, b) => a.zIndex - b.zIndex)
-              .map((el) => (
-                <CanvasElement
-                  key={el.id}
-                  el={el}
-                  selected={selectedElId === el.id}
-                  editing={editingElId === el.id}
-                  slideRef={slideRef}
-                  onSelect={() => {
-                    setSelectedElId(el.id);
-                    // Only clear editing if switching to a different element
-                    if (selectedElId !== el.id) setEditingElId(null);
-                  }}
-                  onStartEdit={() => setEditingElId(el.id)}
-                  onCommitText={(txt) => commitText(el.id, txt)}
-                  onMove={(p) => commitMove(el.id, p)}
-                  onResize={(p) => commitResize(el.id, p)}
-                />
-              ))}
+              {[...collectLeaves(activeSlide.root!)]
+                .sort((a, b) => (a.zIndex ?? 0) - (b.zIndex ?? 0))
+                .map((leaf) => (
+                  <CanvasElement
+                    key={leaf.id}
+                    leaf={leaf}
+                    selected={selectedElId === leaf.id}
+                    editing={editingElId === leaf.id}
+                    slideRef={slideRef}
+                    onSelect={() => {
+                      setSelectedElId(leaf.id);
+                      setRailSelectionActive(false);
+                      if (selectedElId !== leaf.id) setEditingElId(null);
+                    }}
+                    onStartEdit={() => setEditingElId(leaf.id)}
+                    onCommitText={(txt) => commitText(leaf.id, txt)}
+                    onMove={(p) => commitMove(leaf.id, p)}
+                    onResize={(p) => commitResize(leaf.id, p)}
+                  />
+                ))}
 
-            {/* Empty-slide hint */}
-            {activeSlide.elements.length === 0 && (
-              <div
-                className="absolute inset-0 flex flex-col items-center justify-center gap-3 pointer-events-none"
-                style={{ color: "oklch(0.7 0.01 192)" }}
-              >
-                <Type size={32} strokeWidth={1} />
-                <span className="text-[13px] font-mono">Click T in the toolbar to add text</span>
-              </div>
-            )}
+              {collectLeaves(activeSlide.root!).length === 0 && (
+                <div
+                  className="absolute inset-0 flex flex-col items-center justify-center gap-3 pointer-events-none"
+                  style={{ color: "oklch(0.7 0.01 192)" }}
+                >
+                  <Type size={32} strokeWidth={1} />
+                  <span className="text-[13px] font-mono">Click T in the toolbar to add text</span>
+                </div>
+              )}
+            </div>
           </div>
         </div>
 
@@ -416,7 +662,7 @@ export function EditorView({ startNodeId, initialNodes }: Props) {
             {(
               [
                 { id: "agent",   label: "Agent",   icon: Sparkles },
-                { id: "design",  label: "Design",  icon: SlidersHorizontal },
+                { id: "design",  label: "Designs", icon: LayoutTemplate },
                 { id: "arrange", label: "Arrange", icon: Layers },
               ] as { id: RightTab; label: string; icon: React.FC<{ size: number }> }[]
             ).map(({ id, label, icon: Icon }) => (
@@ -436,17 +682,17 @@ export function EditorView({ startNodeId, initialNodes }: Props) {
           <div className="flex-1 flex flex-col min-h-0 overflow-hidden">
             {rightTab === "agent"   && <AgentPanel />}
             {rightTab === "design"  && (
-              <DesignPanel
-                el={selectedEl}
-                onChange={(fn) => selectedEl && updateEl(selectedEl.id, fn)}
+              <DesignsPanel
+                slide={activeSlide}
+                onApply={applyCandidate}
               />
             )}
             {rightTab === "arrange" && (
               <ArrangePanel
-                el={selectedEl}
-                onChange={(fn) => selectedEl && updateEl(selectedEl.id, fn)}
-                onBringForward={() => selectedEl && bringForward(selectedEl.id)}
-                onSendBack={() => selectedEl && sendBack(selectedEl.id)}
+                leaf={selectedLeaf}
+                onDispatchOp={dispatchOp}
+                onBringForward={() => selectedLeaf && bringForward(selectedLeaf.id)}
+                onSendBack={() => selectedLeaf && sendBack(selectedLeaf.id)}
               />
             )}
           </div>
@@ -476,7 +722,7 @@ const HANDLE_STYLE: Record<HandlePos, React.CSSProperties> = {
 };
 
 interface CanvasElementProps {
-  el: SlideElement;
+  leaf: LeafNode;
   selected: boolean;
   editing: boolean;
   slideRef: React.RefObject<HTMLDivElement | null>;
@@ -488,7 +734,7 @@ interface CanvasElementProps {
 }
 
 function CanvasElement({
-  el, selected, editing, slideRef,
+  leaf, selected, editing, slideRef,
   onSelect, onStartEdit, onCommitText, onMove, onResize,
 }: CanvasElementProps) {
   // livePlacement drives visual re-render during drag
@@ -502,8 +748,12 @@ function CanvasElement({
     wasSelected: boolean; // captured at drag-start to avoid stale `selected` prop
   } | null>(null);
 
-  const active = livePlacement ?? el.placement;
+  const active = livePlacement ?? leaf.placement;
   const css = gridToCSS(active);
+
+  const textBlock  = leaf.block.role === "text"  ? leaf.block : null;
+  const shapeBlock = leaf.block.role === "shape" ? leaf.block : null;
+  const imageBlock = leaf.block.role === "image" ? leaf.block : null;
 
   const startDrag = (type: "move" | HandlePos, e: React.MouseEvent) => {
     e.stopPropagation();
@@ -512,7 +762,7 @@ function CanvasElement({
       type,
       startMx: e.clientX,
       startMy: e.clientY,
-      startPlacement: el.placement,
+      startPlacement: leaf.placement,
       wasSelected: selected, // capture NOW before onSelect changes state
     };
     livePlacementRef.current = null;
@@ -561,20 +811,20 @@ function CanvasElement({
   };
 
   const fontFamilyCSS =
-    el.text?.fontFamily === "mono"   ? "var(--font-mono, monospace)"  :
-    el.text?.fontFamily === "serif"  ? "var(--font-serif, serif)"     :
+    textBlock?.style.fontFamily === "mono"  ? "var(--font-mono, monospace)"  :
+    textBlock?.style.fontFamily === "serif" ? "var(--font-serif, serif)"     :
     "inherit";
 
-  const textStyle: React.CSSProperties = el.text ? {
+  const textStyle: React.CSSProperties = textBlock ? {
     width: "100%", height: "100%", padding: "4px",
-    fontSize: el.text.fontSize,
-    fontWeight: el.text.fontWeight,
-    fontStyle: el.text.fontStyle,
-    color: el.text.color,
-    textAlign: el.text.textAlign,
-    textDecoration: el.text.textDecoration,
-    lineHeight: el.text.lineHeight ?? 1.4,
-    letterSpacing: el.text.letterSpacing,
+    fontSize:       textBlock.style.fontSize,
+    fontWeight:     textBlock.style.fontWeight,
+    fontStyle:      textBlock.style.fontStyle,
+    color:          textBlock.style.color,
+    textAlign:      textBlock.style.textAlign,
+    textDecoration: textBlock.style.textDecoration,
+    lineHeight:     textBlock.style.lineHeight ?? 1.4,
+    letterSpacing:  textBlock.style.letterSpacing,
     fontFamily: fontFamilyCSS,
     wordBreak: "break-word",
     whiteSpace: "pre-wrap",
@@ -585,10 +835,10 @@ function CanvasElement({
     <div
       style={{
         ...css,
-        opacity: el.opacity,
-        transform: el.rotation ? `rotate(${el.rotation}deg)` : undefined,
+        opacity: leaf.opacity ?? 1,
+        transform: (leaf.rotation ?? 0) ? `rotate(${leaf.rotation}deg)` : undefined,
         cursor: editing ? "text" : "move",
-        zIndex: el.zIndex + 5,
+        zIndex: (leaf.zIndex ?? 1) + 5,
         userSelect: editing ? "text" : "none",
         boxSizing: "border-box",
       }}
@@ -598,11 +848,11 @@ function CanvasElement({
       }}
     >
       {/* ── Text ── */}
-      {el.type === "text" && (
+      {textBlock && (
         editing ? (
           <textarea
             autoFocus
-            defaultValue={el.text?.content}
+            defaultValue={textBlock.text}
             // BUG FIX: stopPropagation on mousedown so outer div doesn't call onSelect()
             // which would clear editingElId and exit edit mode mid-type
             onMouseDown={(e) => e.stopPropagation()}
@@ -621,28 +871,28 @@ function CanvasElement({
             }}
           />
         ) : (
-          <div style={textStyle}>{el.text?.content}</div>
+          <div style={textStyle}>{textBlock.text}</div>
         )
       )}
 
       {/* ── Shape ── */}
-      {el.type === "shape" && (
+      {shapeBlock && (
         <div
           style={{
             width: "100%", height: "100%",
-            background: el.shape?.fill,
-            borderRadius: el.shape?.borderRadius,
-            border: (el.shape?.strokeWidth ?? 0) > 0
-              ? `${el.shape!.strokeWidth}px solid ${el.shape!.stroke}`
+            background: shapeBlock.style.fill,
+            borderRadius: shapeBlock.style.borderRadius,
+            border: (shapeBlock.style.strokeWidth ?? 0) > 0
+              ? `${shapeBlock.style.strokeWidth}px solid ${shapeBlock.style.stroke}`
               : undefined,
           }}
         />
       )}
 
       {/* ── Image ── */}
-      {el.type === "image" && (
-        el.src ? (
-          <img src={el.src} style={{ width: "100%", height: "100%", objectFit: "cover" }} />
+      {imageBlock && (
+        imageBlock.src ? (
+          <img src={imageBlock.src} style={{ width: "100%", height: "100%", objectFit: "cover" }} />
         ) : (
           <div
             style={{
@@ -722,56 +972,122 @@ function applyResize(handle: HandlePos, sp: GridPlacement, dx: number, dy: numbe
 }
 
 // ─── Agent panel ──────────────────────────────────────────────────────────────
+interface ChatMessage {
+  id: string;
+  role: "user" | "agent";
+  content: string;
+}
+
 function AgentPanel() {
+  const [messages, setMessages] = useState<ChatMessage[]>([]);
+  const [draft, setDraft] = useState("");
+  const listRef = useRef<HTMLDivElement>(null);
+
+  // Scroll to bottom whenever messages grow
+  useEffect(() => {
+    if (listRef.current) listRef.current.scrollTop = listRef.current.scrollHeight;
+  }, [messages]);
+
+  const submit = () => {
+    const text = draft.trim();
+    if (!text) return;
+    setMessages((prev) => [...prev, { id: `msg-${Date.now()}`, role: "user", content: text }]);
+    setDraft("");
+
+    // ── AGENT ROLE ────────────────────────────────────────────────────────────
+    // This agent proposes slide edits (IR mutations), not just chat replies.
+    // It reads the current slides IR + the user's message and returns structured
+    // proposals — add/remove/restructure scenes, swap layouts, edit content,
+    // place images. Proposals surface here for user review; they are NEVER
+    // auto-applied. The user explicitly accepts or discards each one.
+    // This mirrors the ghost-node accept/discard pattern used on the board.
+    //
+    // ── PROPOSAL FLOW ─────────────────────────────────────────────────────────
+    // 1. INTAKE: call Gemini Flash with (text, slides) → returns ProposedMutations[].
+    //    Append an agent message carrying the proposal object (not just a string).
+    //    The PROPOSAL RENDER POINT above surfaces Accept / Discard affordances.
+    //    On Accept  → dispatch({ type: "commit", updater: applyMutations(proposal) })
+    //    On Discard → mark proposal dropped; bubble stays as plain chat message.
+    //
+    // 2. SELF-CRITIQUE: after the render loop applies mutations, diff expected vs.
+    //    rendered output. Failures / imbalance → agent messages with scene refs.
+    //
+    // 3. ARGUMENT INTELLIGENCE: Gemini Pro scans argument quality across all scenes.
+    //    Unsupported claims / pacing issues → agent messages linking to the scene
+    //    and the Argument tab.
+    //
+    // 4. AGENT RESPONSE: to append any agent message (chat reply or proposal):
+    //    setMessages((prev) => [...prev, { id: `msg-${Date.now()}`, role: "agent", content }]);
+  };
+
   return (
     <div className="flex-1 flex flex-col min-h-0">
-      <div className="flex-1 overflow-y-auto p-3 space-y-3">
-        <div className="flex justify-end gap-2 items-start">
-          <div className="max-w-[85%] rounded-xl rounded-tr-sm px-3 py-2 text-[11px] leading-snug text-white" style={{ background: "var(--accent-teal)" }}>
-            Here's the brain-dump + our deck-data.csv. Make it investor-ready, 5 minutes.
+      {/* Message list */}
+      <div ref={listRef} className="flex-1 overflow-y-auto p-3 space-y-3">
+        {messages.length === 0 ? (
+          <div className="flex flex-col items-center justify-center h-full gap-3 text-center py-10">
+            <div className="w-9 h-9 rounded-full bg-canvas border border-border flex items-center justify-center">
+              <Sparkles size={15} style={{ color: "var(--accent-teal)" }} />
+            </div>
+            <p className="text-[11px] text-muted-foreground leading-relaxed max-w-[190px]">
+              Drop a brain-dump, dataset, or prompt and the agent will refine the deck from here.
+            </p>
           </div>
-          <div className="w-6 h-6 rounded-full flex items-center justify-center text-[8px] font-bold text-white shrink-0 mt-0.5" style={{ background: "oklch(0.55 0.1 250)" }}>You</div>
-        </div>
-        <div className="flex gap-2 items-start">
-          <div className="w-6 h-6 rounded-full bg-canvas border border-border flex items-center justify-center shrink-0 mt-0.5">
-            <Sparkles size={10} style={{ color: "var(--accent-teal)" }} />
-          </div>
-          <div className="flex-1 bg-card border border-border rounded-xl rounded-tl-sm px-3 py-2.5 text-[11px] space-y-2">
-            {[
-              { done: true,  text: "Brand extracted → persimmon + pine palette" },
-              { done: true,  text: "7 scenes laid out, 6 passed first render" },
-              { done: true,  text: "Scene 04 re-balanced (was crowded)" },
-              { done: false, text: "Checking the argument…" },
-            ].map(({ done, text }, i) => (
-              <div key={i} className="flex items-start gap-2">
-                {done
-                  ? <CheckCircle2 size={12} className="mt-px shrink-0" style={{ color: "var(--accent-teal)" }} />
-                  : <Loader2     size={12} className="mt-px shrink-0 animate-spin text-muted-foreground" />}
-                <span className={done ? "text-ink" : "text-muted-foreground"}>{text}</span>
+        ) : (
+          messages.map((msg) =>
+            msg.role === "user" ? (
+              // User message — right-aligned teal bubble, no avatar
+              <div key={msg.id} className="flex justify-end">
+                <div
+                  className="max-w-[85%] rounded-xl rounded-tr-sm px-3 py-2 text-[11px] leading-snug text-white whitespace-pre-wrap"
+                  style={{ background: "var(--accent-teal)" }}
+                >
+                  {msg.content}
+                </div>
               </div>
-            ))}
-          </div>
-        </div>
-        <div className="flex gap-2 items-start">
-          <div className="w-6 h-6 rounded-full bg-canvas border border-border flex items-center justify-center shrink-0 mt-0.5">
-            <Sparkles size={10} style={{ color: "var(--accent-teal)" }} />
-          </div>
-          <div className="flex-1 bg-card border border-border rounded-xl rounded-tl-sm px-3 py-2.5 text-[11px] leading-snug text-muted-foreground">
-            Scene <strong className="text-ink">06</strong> makes a claim with no evidence, and you're running <strong className="text-ink">~7 min</strong> for a 5-min slot.
-          </div>
-        </div>
+            ) : (
+              // Agent message — left-aligned muted bubble, no avatar.
+              // PROPOSAL RENDER POINT: when the agent proposes slide edits, this bubble
+              // will carry a pending proposal (structured IR mutations) instead of plain text.
+              // Render as: message content + Accept / Discard action row beneath the bubble.
+              // Accepted → dispatch({ type: "commit", updater: applyMutations })
+              // Discarded → drop the proposal, bubble stays as a plain chat message.
+              <div key={msg.id} className="flex">
+                <div className="max-w-[85%] bg-card border border-border rounded-xl rounded-tl-sm px-3 py-2.5 text-[11px] leading-snug text-muted-foreground whitespace-pre-wrap">
+                  {msg.content}
+                </div>
+              </div>
+            )
+          )
+        )}
       </div>
+
+      {/* Input */}
       <div className="border-t border-border p-2.5 shrink-0">
         <div className="border border-border rounded-lg px-3 py-2 bg-card flex items-center">
-          <input className="flex-1 text-[11px] bg-transparent outline-none placeholder:text-muted-foreground" placeholder="Ask the agent to refine the deck…" />
+          <input
+            className="flex-1 text-[11px] bg-transparent outline-none placeholder:text-muted-foreground"
+            placeholder="Ask the agent to refine the deck…"
+            value={draft}
+            onChange={(e) => setDraft(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); submit(); }
+            }}
+          />
         </div>
         <div className="flex items-center justify-between mt-2 px-0.5">
           <div className="flex gap-0.5">
             {[Paperclip, Mic].map((Icon, i) => (
-              <button key={i} className="w-7 h-7 flex items-center justify-center rounded hover:bg-canvas/60 text-muted-foreground hover:text-ink transition-colors"><Icon size={13} /></button>
+              <button key={i} className="w-7 h-7 flex items-center justify-center rounded hover:bg-canvas/60 text-muted-foreground hover:text-ink transition-colors">
+                <Icon size={13} />
+              </button>
             ))}
           </div>
-          <button className="w-8 h-8 rounded-full flex items-center justify-center text-white hover:opacity-80 transition-opacity" style={{ background: "var(--accent-teal)" }}>
+          <button
+            onClick={submit}
+            className="w-8 h-8 rounded-full flex items-center justify-center text-white hover:opacity-80 transition-opacity"
+            style={{ background: "var(--accent-teal)" }}
+          >
             <Send size={13} />
           </button>
         </div>
@@ -780,145 +1096,93 @@ function AgentPanel() {
   );
 }
 
-// ─── Design panel ─────────────────────────────────────────────────────────────
-interface DesignPanelProps {
-  el: SlideElement | null;
-  onChange: (fn: (e: SlideElement) => SlideElement) => void;
-}
-
-const WEIGHTS = [
-  { label: "Regular",   value: 400 },
-  { label: "Medium",    value: 500 },
-  { label: "SemiBold",  value: 600 },
-  { label: "Bold",      value: 700 },
-  { label: "ExtraBold", value: 800 },
-];
-
-function DesignPanel({ el, onChange }: DesignPanelProps) {
-  const t  = el?.text;
-  const sh = el?.shape;
-
-  const setT = <K extends keyof TextStyle>(key: K, value: TextStyle[K]) =>
-    onChange((e) => ({ ...e, text: { ...e.text!, [key]: value } }));
-
-  // Convert any color to hex for the color input (falls back gracefully)
-  const toHex = (c?: string) => {
-    if (!c) return "#000000";
-    if (c.startsWith("#")) return c;
-    return "#000000";
-  };
+// ─── Designs panel ────────────────────────────────────────────────────────────
+function DesignsPanel({
+  slide,
+  onApply,
+}: {
+  slide: import("@/lib/projektor-data").SlideNode;
+  onApply: (candidateId: string) => void;
+}) {
+  if ((slide.candidates ?? []).length === 0) {
+    return (
+      <div className="flex-1 flex flex-col items-center justify-center gap-3 p-5 text-center">
+        <LayoutTemplate size={22} className="text-muted-foreground" strokeWidth={1.5} />
+        <p className="text-[11px] text-muted-foreground leading-snug">
+          No design candidates yet.
+          <br />The agent will generate alternatives here.
+        </p>
+      </div>
+    );
+  }
 
   return (
-    <div className="flex-1 overflow-y-auto p-3 space-y-4 text-[11px]">
-      {!el && <div className="text-center text-muted-foreground py-8 text-[11px]">Select an element to edit its style</div>}
-
-      {el && t && (
-        <Section label="Typography">
-          <Row label="Size">
-            <div className="flex items-center border border-border rounded h-6">
-              <button className="px-1.5 text-muted-foreground hover:text-ink" onClick={() => setT("fontSize", Math.max(8, t.fontSize - 2))}>−</button>
-              <span className="px-2 font-mono text-[10px] border-x border-border w-10 text-center">{t.fontSize}</span>
-              <button className="px-1.5 text-muted-foreground hover:text-ink" onClick={() => setT("fontSize", t.fontSize + 2)}>+</button>
+    <div className="flex-1 overflow-y-auto p-2.5 space-y-2.5">
+      {(slide.candidates ?? []).map((cand) => {
+        const isActive = slide.activeDesignId === cand.id;
+        return (
+          <button
+            key={cand.id}
+            onClick={() => onApply(cand.id)}
+            className={`w-full text-left rounded-md border-2 overflow-hidden transition-all ${
+              isActive
+                ? "border-[color:var(--accent-teal)] shadow-sm"
+                : "border-border hover:border-[color:var(--accent-teal)]/50"
+            }`}
+          >
+            {/* Mini slide preview — reuses SlideThumb with candidate's root */}
+            <div className="relative w-full overflow-hidden bg-white" style={{ aspectRatio: "16/9" }}>
+              <SlideThumb node={{ ...slide, root: cand.root }} />
             </div>
-          </Row>
-          <Row label="Weight">
-            <select
-              value={t.fontWeight}
-              onChange={(e) => setT("fontWeight", Number(e.target.value))}
-              className="border border-border rounded px-1.5 h-6 text-[10px] bg-card text-ink outline-none focus:border-[color:var(--accent-teal)]"
+            <div
+              className={`flex items-center justify-between px-2 py-1.5 text-[10px] font-medium ${
+                isActive ? "bg-[color:var(--accent-soft)]" : "bg-chrome"
+              }`}
             >
-              {WEIGHTS.map((w) => <option key={w.value} value={w.value}>{w.label}</option>)}
-            </select>
-          </Row>
-          <Row label="Align">
-            <div className="flex border border-border rounded overflow-hidden">
-              {(["left", "center", "right"] as const).map((a, i) => (
-                <button
-                  key={a}
-                  onClick={() => setT("textAlign", a)}
-                  className={`w-7 h-6 flex items-center justify-center transition-colors ${t.textAlign === a ? "bg-[color:var(--accent-teal)] text-white" : "text-muted-foreground hover:text-ink"}`}
-                >
-                  {[<AlignLeft size={10} />, <AlignCenter size={10} />, <AlignRight size={10} />][i]}
-                </button>
-              ))}
+              <span className={isActive ? "font-semibold text-ink" : "text-muted-foreground"}>
+                {cand.label}
+              </span>
+              {isActive && (
+                <span className="text-[9px] font-mono uppercase tracking-wide" style={{ color: "var(--accent-teal)" }}>
+                  Active
+                </span>
+              )}
             </div>
-          </Row>
-          <Row label="Color">
-            <div className="flex items-center gap-1.5">
-              <input
-                type="color"
-                value={toHex(t.color)}
-                onChange={(e) => setT("color", e.target.value)}
-                className="w-6 h-6 rounded border border-border cursor-pointer"
-              />
-              <span className="font-mono text-[10px] text-muted-foreground truncate max-w-[100px]">{t.color}</span>
-            </div>
-          </Row>
-        </Section>
-      )}
-
-      {el && sh && (
-        <Section label="Shape">
-          <Row label="Fill">
-            <input
-              type="color"
-              value={toHex(sh.fill)}
-              onChange={(e) => onChange((el) => ({ ...el, shape: { ...el.shape!, fill: e.target.value } }))}
-              className="w-6 h-6 rounded border border-border cursor-pointer"
-            />
-          </Row>
-          <Row label="Radius">
-            <div className="flex items-center gap-1.5">
-              <input
-                type="range" min={0} max={100} value={sh.borderRadius}
-                onChange={(e) => onChange((el) => ({ ...el, shape: { ...el.shape!, borderRadius: Number(e.target.value) } }))}
-                className="w-24 accent-[color:var(--accent-teal)]"
-              />
-              <span className="font-mono text-[10px] w-6">{sh.borderRadius}</span>
-            </div>
-          </Row>
-        </Section>
-      )}
-
-      {el && (
-        <Section label="Opacity">
-          <div className="flex items-center gap-2">
-            <input
-              type="range" min={0} max={1} step={0.05} value={el.opacity}
-              onChange={(e) => onChange((el) => ({ ...el, opacity: Number(e.target.value) }))}
-              className="flex-1 accent-[color:var(--accent-teal)]"
-            />
-            <span className="font-mono text-[10px] w-8 text-right">{Math.round(el.opacity * 100)}%</span>
-          </div>
-        </Section>
-      )}
+          </button>
+        );
+      })}
+      <p className="text-[10px] text-center text-muted-foreground pt-1 pb-2">
+        AI-generated candidates will appear here
+      </p>
     </div>
   );
 }
 
 // ─── Arrange panel ────────────────────────────────────────────────────────────
 interface ArrangePanelProps {
-  el: SlideElement | null;
-  onChange: (fn: (e: SlideElement) => SlideElement) => void;
+  leaf: LeafNode | null;
+  onDispatchOp: (op: SlideEditOp) => void;
   onBringForward: () => void;
   onSendBack: () => void;
 }
 
-function ArrangePanel({ el, onChange, onBringForward, onSendBack }: ArrangePanelProps) {
-  const p = el?.placement;
+function ArrangePanel({ leaf, onDispatchOp, onBringForward, onSendBack }: ArrangePanelProps) {
+  const p = leaf?.placement;
 
   const pctLabel = (v: number, max: number) => `${((v / max) * 100).toFixed(1)}%`;
   const setPlacement = (key: keyof GridPlacement, raw: string) => {
     const num = parseFloat(raw);
-    if (!Number.isFinite(num) || !el) return;
-    onChange((e) => ({ ...e, placement: { ...e.placement, [key]: snap(num) } }));
+    if (!Number.isFinite(num) || !leaf) return;
+    onDispatchOp({ op: "setPlacement", nodeId: leaf.id, placement: { ...leaf.placement, [key]: snap(num) } });
   };
+
+  const shapeBlock = leaf?.block.role === "shape" ? leaf.block : null;
 
   return (
     <div className="flex-1 overflow-y-auto p-3 space-y-4 text-[11px]">
-      {!el && <div className="text-center text-muted-foreground py-8 text-[11px]">Select an element to arrange</div>}
+      {!leaf && <div className="text-center text-muted-foreground py-8 text-[11px]">Select an element to arrange</div>}
 
-      {el && p && (
+      {leaf && p && (
         <>
           <Section label="Position">
             <div className="grid grid-cols-2 gap-2">
@@ -962,8 +1226,8 @@ function ArrangePanel({ el, onChange, onBringForward, onSendBack }: ArrangePanel
             <Row label="Angle">
               <div className="flex items-center gap-1.5">
                 <input
-                  type="number" min={-180} max={180} value={el.rotation}
-                  onChange={(e) => onChange((el) => ({ ...el, rotation: Number(e.target.value) }))}
+                  type="number" min={-180} max={180} value={leaf.rotation ?? 0}
+                  onChange={(e) => onDispatchOp({ op: "setRotation", nodeId: leaf.id, rotation: Number(e.target.value) })}
                   className="w-16 px-2 py-1 border border-border rounded text-[11px] bg-card text-ink outline-none focus:border-[color:var(--accent-teal)]"
                 />
                 <span className="text-muted-foreground">°</span>
@@ -972,12 +1236,27 @@ function ArrangePanel({ el, onChange, onBringForward, onSendBack }: ArrangePanel
           </Section>
 
           <Section label="Layer">
-            <Row label="Z-index"><span className="font-mono text-[10px]">{el.zIndex}</span></Row>
+            <Row label="Z-index"><span className="font-mono text-[10px]">{leaf.zIndex ?? 0}</span></Row>
             <div className="flex gap-1.5 mt-1">
-              <button onClick={onBringForward} className="flex-1 py-1.5 text-[10px] font-medium border border-border rounded hover:bg-canvas/50 transition-colors">Bring forward</button>
-              <button onClick={onSendBack}     className="flex-1 py-1.5 text-[10px] font-medium border border-border rounded hover:bg-canvas/50 transition-colors">Send back</button>
+              <button onClick={onBringForward} className="flex-1 py-1.5 text-[10px] font-medium border border-border rounded hover:bg-canvas/50 transition-colors">Bring to Front</button>
+              <button onClick={onSendBack}     className="flex-1 py-1.5 text-[10px] font-medium border border-border rounded hover:bg-canvas/50 transition-colors">Send to Back</button>
             </div>
           </Section>
+
+          {shapeBlock && (
+            <Section label="Shape">
+              <Row label="Radius">
+                <div className="flex items-center gap-1.5">
+                  <input
+                    type="range" min={0} max={100} value={shapeBlock.style.borderRadius}
+                    onChange={(e) => onDispatchOp({ op: "setStyle", nodeId: leaf.id, style: { borderRadius: Number(e.target.value) } })}
+                    className="w-20 accent-[color:var(--accent-teal)]"
+                  />
+                  <span className="font-mono text-[10px] w-6">{shapeBlock.style.borderRadius}</span>
+                </div>
+              </Row>
+            </Section>
+          )}
         </>
       )}
     </div>
@@ -1006,6 +1285,90 @@ function ToolBtn({ children, title, active, dimmed, onClick }: {
   );
 }
 function Sep() { return <div className="w-px h-5 bg-border mx-1 shrink-0" />; }
+
+function WeightSelect({ value, disabled, onChange }: {
+  value: number; disabled?: boolean; onChange: (w: number) => void;
+}) {
+  return (
+    <select
+      value={value}
+      disabled={disabled}
+      onChange={(e) => onChange(Number(e.target.value))}
+      onClick={(e) => e.stopPropagation()}
+      className={`h-7 px-1 text-[10px] border border-border rounded bg-card text-ink outline-none cursor-pointer transition-opacity ${
+        disabled ? "opacity-30 cursor-default" : "focus:border-[color:var(--accent-teal)]"
+      }`}
+      style={{ minWidth: 68 }}
+    >
+      {WEIGHT_OPTIONS.map((w) => (
+        <option key={w.value} value={w.value}>{w.label}</option>
+      ))}
+    </select>
+  );
+}
+
+function ColorSwatch({ color, label, onChange }: {
+  color: string | undefined; label?: string; onChange: (hex: string) => void;
+}) {
+  const disabled = color === undefined;
+  return (
+    <label
+      title={label ?? "Color"}
+      className={`relative w-7 h-7 rounded border border-border flex items-center justify-center cursor-pointer shrink-0 transition-opacity ${
+        disabled ? "opacity-30 pointer-events-none" : "hover:border-[color:var(--accent-teal)]"
+      }`}
+    >
+      {/* Visible swatch — CSS renders the real color (oklch, hsl, hex all work) */}
+      <div className="w-4 h-4 rounded-sm shadow-sm" style={{ background: color ?? "#ccc" }} />
+      {/* Hidden native picker — value needs hex; picker updates to hex on pick */}
+      <input
+        type="color"
+        value={toHex(color)}
+        disabled={disabled}
+        onChange={(e) => onChange(e.target.value)}
+        className="absolute inset-0 opacity-0 cursor-pointer w-full h-full"
+      />
+    </label>
+  );
+}
+
+function OpacityInput({ value, onChange }: {
+  value: number | undefined; onChange: (o: number) => void;
+}) {
+  const pct = value !== undefined ? Math.round(value * 100) : undefined;
+  const [draft, setDraft] = useState(pct?.toString() ?? "");
+  useEffect(() => { setDraft(pct?.toString() ?? ""); }, [pct]);
+
+  const commit = (raw: string) => {
+    const n = parseInt(raw, 10);
+    if (Number.isFinite(n) && n >= 0 && n <= 100) onChange(n / 100);
+    else setDraft(pct?.toString() ?? "");
+  };
+
+  return (
+    <div
+      className={`flex items-center border border-border rounded h-7 overflow-hidden transition-opacity ${
+        value === undefined ? "opacity-30" : ""
+      }`}
+    >
+      <input
+        type="text"
+        value={draft}
+        disabled={value === undefined}
+        placeholder="—"
+        onChange={(e) => setDraft(e.target.value)}
+        onBlur={(e) => commit(e.target.value)}
+        onKeyDown={(e) => {
+          e.stopPropagation();
+          if (e.key === "Enter") { commit((e.target as HTMLInputElement).value); (e.target as HTMLInputElement).blur(); }
+          if (e.key === "Escape") { setDraft(pct?.toString() ?? ""); (e.target as HTMLInputElement).blur(); }
+        }}
+        className="w-7 px-1 text-[11px] font-mono text-center bg-transparent outline-none text-ink placeholder:text-muted-foreground"
+      />
+      <span className="pr-1 text-[10px] text-muted-foreground font-mono">%</span>
+    </div>
+  );
+}
 const FONT_SIZE_PRESETS = [8, 10, 11, 12, 14, 16, 18, 20, 24, 28, 32, 36, 40, 48, 60, 72, 96];
 
 function FontSizeControl({ value, onChange }: { value: number | undefined; onChange: (n: number) => void }) {

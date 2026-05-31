@@ -8,6 +8,7 @@ import { INITIAL_NODES, INITIAL_EDGES, type SlideNode, type Edge } from "@/lib/p
 import { createDeck, getDeck } from "@/lib/deckStore";
 import type { HydrateResult } from "@/lib/chunker";
 import { useAuth } from "@/context/AuthContext";
+import { DEFAULT_ZOOM, ZOOM_STEP, clampZoom, zoomBy } from "@/lib/viewport";
 
 // ── Route search params: ?deckId=xxx loads a specific deck from the session store
 export const Route = createFileRoute("/")({
@@ -40,7 +41,8 @@ function Projektor() {
   const [deck, setDeck] = useState<SlideNode[]>(savedDeck?.nodes ?? INITIAL_NODES);
   const [deckEdges, setDeckEdges] = useState<Edge[]>(savedDeck?.edges ?? INITIAL_EDGES);
   const [mode, setMode] = useState<"board" | "editor">(savedDeck ? "board" : "editor");
-  const [zoom, setZoom] = useState(0.85);
+  const [zoom, setZoomState] = useState(DEFAULT_ZOOM);
+  const [isGridVisible, setIsGridVisible] = useState(false);
   const [editorStart, setEditorStart] = useState<string | null>(null);
 
   useEffect(() => {
@@ -49,7 +51,24 @@ function Projektor() {
     }
   }, [loading, currentUser, navigate]);
 
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (!e.metaKey && !e.ctrlKey) return;
+      const isZoomIn = e.key === "+" || e.key === "=" || e.code === "NumpadAdd";
+      const isZoomOut = e.key === "-" || e.key === "_" || e.code === "NumpadSubtract";
+      if (!isZoomIn && !isZoomOut) return;
+      e.preventDefault();
+      if (isZoomIn) setZoomState((current) => zoomBy(current, ZOOM_STEP));
+      if (isZoomOut) setZoomState((current) => zoomBy(current, -ZOOM_STEP));
+    };
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, []);
+
   if (loading || !currentUser) return null;
+
+  const setZoom = (nextZoom: number) => setZoomState(clampZoom(nextZoom));
+  const toggleGrid = () => setIsGridVisible((v) => !v);
 
   // GRAPH VIEW ENTRY POINT: generate output lands on the graph (board mode).
   // Buckets populate the graph as structural argument nodes; each call creates
@@ -82,12 +101,18 @@ function Projektor() {
           }}
         />
       )}
-      {/* EditorView stays mounted so useState never resets; display:none hides it in board mode */}
+      {/* EditorView stays mounted so its undo history / edits survive Board↔Slides switches */}
       <div
         className="flex-1 min-h-0 flex flex-col"
         style={{ display: mode === "editor" ? undefined : "none" }}
       >
-        <EditorView initialNodes={deck} startNodeId={editorStart} />
+        <EditorView
+          startNodeId={editorStart}
+          zoom={zoom}
+          setZoom={setZoom}
+          isGridVisible={isGridVisible}
+          toggleGrid={toggleGrid}
+        />
       </div>
     </div>
   );

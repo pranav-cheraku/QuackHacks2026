@@ -8,8 +8,8 @@ import {
   Paperclip, Mic, Send, LayoutTemplate,
   Layers, Grid3x3, Trash2, Copy,
 } from "lucide-react";
-import { INITIAL_NODES } from "@/lib/projektor-data";
-import type { SlideNode } from "@/lib/projektor-data";
+import { INITIAL_NODES, INITIAL_EDGES } from "@/lib/projektor-data";
+import type { SlideNode, Edge } from "@/lib/projektor-data";
 import { SlideThumb } from "./SlideThumb";
 import { GridOverlay } from "./GridOverlay";
 import { makeTextElement, makeShapeElement, makeImageElement, nextId } from "@/lib/slide-model";
@@ -90,6 +90,11 @@ export function EditorView({ startNodeId }: Props) {
   const canUndo = past.length > 0;
   const canRedo = future.length > 0;
 
+  // GRAPH SYNC: narrative edges live alongside slides in deck state. Graph View renders
+  // these as directed connectors between nodes; Slides View currently ignores them.
+  // Both views must read from this single edges state — no parallel copy elsewhere.
+  const [edges, setEdges] = useState<Edge[]>(INITIAL_EDGES);
+
   const [activeId, setActiveId] = useState(startNodeId ?? "n1");
   const [selectedElId, setSelectedElId] = useState<string | null>(null);
   const [editingElId, setEditingElId] = useState<string | null>(null);
@@ -156,23 +161,46 @@ export function EditorView({ startNodeId }: Props) {
     [activeId, activeSlide, updateSlide]
   );
 
-  const addSlide = () => {
-    const newSlide: SlideNode = {
-      id: `n-${Date.now()}`,
-      index: slides.length + 1,
-      title: "New Slide",
-      x: 0, y: 0, rotation: 0,
-      state: "rendered",
-      components: [],
-      thumb: "title",
-      elements: [],
-      candidates: [],
-      activeDesignId: null,
-    };
-    dispatch({ type: "commit", updater: (prev) => [...prev, newSlide] });
-    setActiveId(newSlide.id);
+  const addSlide = useCallback(() => {
+    // Stable unique ID — the graph keys nodes on this; never reassign after creation.
+    const id = `n-${Date.now()}`;
+    // GRAPH SYNC: adding a slide = adding a node. The graph reads from the same slides
+    // state and will display it as a new node without any extra wiring.
+    dispatch({
+      type: "commit",
+      updater: (prev) => [
+        ...prev,
+        {
+          id,
+          index: prev.length + 1, // computed inside updater so it's always current
+          title: "New Slide",
+          x: 0, y: 0, rotation: 0,
+          state: "rendered" as const,
+          components: [],
+          thumb: "title" as const,
+          elements: [],
+          candidates: [],
+          activeDesignId: null,
+        },
+      ],
+    });
+    setActiveId(id);
     setSelectedElId(null);
-  };
+  }, []);
+
+  const deleteSlide = useCallback((id: string) => {
+    if (slides.length <= 1) return; // never remove the last scene
+    const idx = slides.findIndex((s) => s.id === id);
+    const sibling = slides[idx + 1] ?? slides[idx - 1];
+    // Navigate before the state update so activeId is never left pointing at a removed scene
+    setActiveId(sibling.id);
+    setSelectedElId(null);
+    setEditingElId(null);
+    // GRAPH SYNC: deleting a slide = removing a node. Prune edges referencing this scene
+    // now so the graph never encounters dangling connectors when it reads this state.
+    dispatch({ type: "commit", updater: (prev) => prev.filter((s) => s.id !== id) });
+    setEdges((prev) => prev.filter((e) => e.from !== id && e.to !== id));
+  }, [slides]);
 
   // ── Keyboard shortcuts ────────────────────────────────────────────────────
   useEffect(() => {
@@ -357,12 +385,19 @@ export function EditorView({ startNodeId }: Props) {
           className="w-[180px] shrink-0 border-r border-border bg-chrome flex flex-col"
           onClick={(e) => e.stopPropagation()}
         >
+          {/* GRAPH SYNC: slides = nodes; the graph keys on slide.id — IDs must be stable + unique.
+               GRAPH SYNC: setActiveId = "focus this node"; graph will reflect the same selection.
+               GRAPH SYNC: the linear order shown here is one path through the graph (the chosen path).
+               Reordering here = choosing a different linearization, not restructuring the graph itself. */}
           <div className="flex-1 overflow-y-auto py-2">
             {slides.map((s) => (
-              <button
+              <div
                 key={s.id}
+                role="button"
+                tabIndex={0}
                 onClick={() => { setActiveId(s.id); setSelectedElId(null); setEditingElId(null); }}
-                className={`w-full px-3 py-1.5 flex gap-2.5 items-start text-left transition-all ${
+                onKeyDown={(e) => e.key === "Enter" && setActiveId(s.id)}
+                className={`group relative w-full px-3 py-1.5 flex gap-2.5 items-start text-left transition-all cursor-pointer ${
                   activeId === s.id ? "bg-[color:var(--accent-soft)]" : "hover:bg-canvas/50"
                 }`}
               >
@@ -377,9 +412,21 @@ export function EditorView({ startNodeId }: Props) {
                 >
                   <SlideThumb node={s} />
                 </div>
-              </button>
+                {/* Delete — hidden until hover; disabled when only 1 slide remains */}
+                {slides.length > 1 && (
+                  <button
+                    onClick={(e) => { e.stopPropagation(); deleteSlide(s.id); }}
+                    title="Delete slide"
+                    className="absolute top-1 right-1 w-5 h-5 flex items-center justify-center rounded opacity-0 group-hover:opacity-100 transition-opacity text-muted-foreground hover:text-red-400 hover:bg-canvas"
+                  >
+                    <Trash2 size={10} />
+                  </button>
+                )}
+              </div>
             ))}
           </div>
+          {/* GRAPH SYNC: scene edits (content/layout) mutate the shared slides state so both
+               views always project the same source of truth — no separate copy per view. */}
           <div className="border-t border-border p-2.5">
             <button
               onClick={addSlide}

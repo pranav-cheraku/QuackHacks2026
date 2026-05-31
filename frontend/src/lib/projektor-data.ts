@@ -52,9 +52,15 @@ export interface SlideNode {
   activeDesignId: string | null;
 }
 
+// GRAPH SYNC: edges are connectors in Graph View. Both views read the same edge state.
+// id    — stable key used by the graph to track connector identity across renders
+// type  — "narrative" (linear story), "branch" (alternate path), "reference" (weak link)
+// dashed — visual hint for Graph View; ignored by Slides View
 export interface Edge {
+  id: string;
   from: string;
   to: string;
+  type: "narrative" | "branch" | "reference";
   dashed?: boolean;
 }
 
@@ -167,12 +173,14 @@ export const INITIAL_NODES: SlideNode[] = [
   },
 ];
 
+// GRAPH SYNC: linearization of the default narrative path through all scenes.
+// Graph View renders these as directed connectors between nodes.
 export const INITIAL_EDGES: Edge[] = [
-  { from: "n1", to: "n2" },
-  { from: "n2", to: "n3" },
-  { from: "n3", to: "n4" },
-  { from: "n4", to: "n5" },
-  { from: "n5", to: "n6" },
+  { id: "e1", from: "n1", to: "n2", type: "narrative" },
+  { id: "e2", from: "n2", to: "n3", type: "narrative" },
+  { id: "e3", from: "n3", to: "n4", type: "narrative" },
+  { id: "e4", from: "n4", to: "n5", type: "narrative" },
+  { id: "e5", from: "n5", to: "n6", type: "narrative" },
 ];
 
 export const INITIAL_VARIANTS: Variant[] = [

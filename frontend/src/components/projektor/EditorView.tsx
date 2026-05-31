@@ -49,8 +49,6 @@ function historyReducer(state: History, action: HistoryAction): History {
       };
   }
 }
-type RightTab = "agent" | "design" | "arrange";
-type HandlePos = "n" | "ne" | "e" | "se" | "s" | "sw" | "w" | "nw";
 
 function isTextEditingTarget(target: EventTarget | null): boolean {
   if (!(target instanceof HTMLElement)) return false;
@@ -72,114 +70,19 @@ function makeSceneId(): string {
   return `n-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
 }
 
-// ─── EditorView ───────────────────────────────────────────────────────────────
-export function EditorView({
-  startNodeId,
-  zoom,
-  setZoom,
-  isGridVisible,
-  toggleGrid,
-}: Props) {
-  const [{ past, present: slides, future }, dispatch] = useReducer(
-    historyReducer,
-    null,
-    (): History => ({
-      past: [],
-      present: INITIAL_NODES.map((n) => ({
-        ...n,
-        elements: SLIDE_ELEMENTS[n.id] ?? [],
-        candidates: SLIDE_CANDIDATES[n.id] ?? [],
-        activeDesignId: SLIDE_CANDIDATES[n.id]?.[0]?.id ?? null,
-      })),
-      future: [],
-    }),
-  );
-  const canUndo = past.length > 0;
-  const canRedo = future.length > 0;
 
-  // GRAPH SYNC: narrative edges live alongside slides in deck state. Graph View renders
-  // these as directed connectors between nodes; Slides View currently ignores them.
-  // Both views must read from this single edges state — no parallel copy elsewhere.
-  const [edges, setEdges] = useState<Edge[]>(INITIAL_EDGES);
-
-  const [activeId, setActiveId] = useState(startNodeId ?? "n1");
-  const [selectedElId, setSelectedElId] = useState<string | null>(null);
-  const [editingElId, setEditingElId] = useState<string | null>(null);
-  const [railSelectionActive, setRailSelectionActive] = useState(true);
-  const [rightTab, setRightTab] = useState<RightTab>("agent");
-  const slideRef = useRef<HTMLDivElement>(null);
-  const lastStartNodeIdRef = useRef<string | null>(startNodeId);
-
-  const activeSlide = slides.find((s) => s.id === activeId) ?? slides[0];
-  const selectedEl =
-    activeSlide?.elements.find((e) => e.id === selectedElId) ?? null;
-
-  useEffect(() => {
-    if (startNodeId === lastStartNodeIdRef.current) return;
-    lastStartNodeIdRef.current = startNodeId;
-    if (!startNodeId || !slides.some((s) => s.id === startNodeId)) return;
-    setActiveId(startNodeId);
-    setSelectedElId(null);
-    setEditingElId(null);
-    setRailSelectionActive(true);
-  }, [startNodeId, slides]);
-
-  // ── Helpers ──────────────────────────────────────────────────────────────
-  const updateSlide = useCallback(
-    (slideId: string, fn: (s: SlideNode) => SlideNode) =>
-      dispatch({
-        type: "commit",
-        updater: (prev) => prev.map((s) => (s.id === slideId ? fn(s) : s)),
-      }),
-    [],
-  );
-
-  const undo = useCallback(() => dispatch({ type: "undo" }), []);
-  const redo = useCallback(() => dispatch({ type: "redo" }), []);
-
-  const updateEl = useCallback(
-    (elId: string, fn: (e: SlideElement) => SlideElement) =>
-      updateSlide(activeId, (s) => ({
-        ...s,
-        elements: s.elements.map((e) => (e.id === elId ? fn(e) : e)),
-      })),
-    [activeId, updateSlide],
-  );
-
-  const addEl = useCallback(
-    (el: SlideElement) => {
-      updateSlide(activeId, (s) => ({ ...s, elements: [...s.elements, el] }));
-      setSelectedElId(el.id);
-      setEditingElId(null);
-      setRailSelectionActive(false);
-    },
-    [activeId, updateSlide],
-  );
-
-  const deleteEl = useCallback(
-    (id: string) => {
-      updateSlide(activeId, (s) => ({
-        ...s,
-        elements: s.elements.filter((e) => e.id !== id),
-      }));
-      setSelectedElId(null);
-      setEditingElId(null);
-    },
-    [activeId, updateSlide],
-  );
-
-interface Props { startNodeId: string | null; }
 type RightTab = "agent" | "design" | "arrange";
 type HandlePos = "n" | "ne" | "e" | "se" | "s" | "sw" | "w" | "nw";
+interface Props { startNodeId: string | null; initialNodes?: import('@/lib/projektor-data').SlideNode[]; }
 
 // ─── EditorView ───────────────────────────────────────────────────────────────
-export function EditorView({ startNodeId }: Props) {
+export function EditorView({ startNodeId, initialNodes }: Props) {
   const [{ past, present: slides, future }, dispatch] = useReducer(
     historyReducer,
     null,
     (): History => ({
       past: [],
-      present: INITIAL_NODES.map((n) => ({ ...n, elements: SLIDE_ELEMENTS[n.id] ?? [] })),
+      present: (initialNodes ?? INITIAL_NODES).map((n) => ({ ...n, elements: SLIDE_ELEMENTS[n.id] ?? n.elements ?? [] })),
       future: [],
     })
   );
@@ -257,15 +160,27 @@ export function EditorView({ startNodeId }: Props) {
       id: `n-${Date.now()}`,
       index: slides.length + 1,
       title: "New Slide",
-      x: 0, y: 0, rotation: 0,
+      kind: "title",
+      status: "draft",
+      x: 0, y: 0,
       state: "rendered",
-      components: [],
       thumb: "title",
       elements: [],
+      candidates: [],
+      activeDesignId: null,
     };
-    dispatch({ type: "commit", updater: (prev) => [...prev, newSlide] });
+    dispatch({ type: "commit", updater: (prev) => reindexSlides([...prev, newSlide]) });
     setActiveId(newSlide.id);
     setSelectedElId(null);
+  };
+
+  const deleteSlide = (id: string) => {
+    if (slides.length <= 1) return;
+    const remaining = reindexSlides(slides.filter((s) => s.id !== id));
+    dispatch({ type: "commit", updater: () => remaining });
+    if (activeId === id) setActiveId(remaining[0]?.id ?? "");
+    setSelectedElId(null);
+    setEditingElId(null);
   };
 
   // ── Keyboard shortcuts ────────────────────────────────────────────────────
@@ -403,8 +318,8 @@ export function EditorView({ startNodeId }: Props) {
                 >
                   <SlideThumb node={s} />
                 </div>
-              );
-            })}
+              </button>
+            ))}
           </div>
           {/* GRAPH SYNC: scene edits (content/layout) mutate the shared slides state so both
                views always project the same source of truth — no separate copy per view. */}
@@ -419,7 +334,6 @@ export function EditorView({ startNodeId }: Props) {
               onClick={() => deleteSlide(activeId)}
               disabled={
                 slides.length <= 1 ||
-                !railSelectionActive ||
                 !!selectedElId ||
                 !!editingElId
               }
@@ -427,7 +341,7 @@ export function EditorView({ startNodeId }: Props) {
               title={
                 slides.length <= 1
                   ? "Cannot delete the last slide"
-                  : railSelectionActive && !selectedElId && !editingElId
+                  : !selectedElId && !editingElId
                     ? "Delete selected slide"
                     : "Select a slide in the rail to delete it"
               }

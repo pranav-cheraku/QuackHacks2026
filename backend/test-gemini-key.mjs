@@ -11,7 +11,7 @@
 
 import { readFileSync, existsSync } from "fs";
 import { resolve, dirname } from "path";
-import { fileURLToPath } from "url";
+import { fileURLToPath, pathToFileURL } from "url";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const envPath = resolve(__dirname, "../frontend/.env");
@@ -47,9 +47,10 @@ if (!existsSync(sdkPath)) {
   console.error("    Run:  cd frontend && npm install");
   process.exit(1);
 }
-const { GoogleGenerativeAI } = await import(sdkPath + "/dist/index.mjs").catch(() =>
-  import(sdkPath + "/dist/index.js")
-);
+// Use pathToFileURL so Windows absolute paths work with ESM dynamic import
+const sdkMjs = pathToFileURL(resolve(sdkPath, "dist/index.mjs")).href;
+const sdkJs  = pathToFileURL(resolve(sdkPath, "dist/index.js")).href;
+const { GoogleGenerativeAI } = await import(sdkMjs).catch(() => import(sdkJs));
 console.log("✓  SDK imported");
 
 // ── 3. Call Gemini ───────────────────────────────────────────────────────────
@@ -59,11 +60,11 @@ const SAMPLE_TEXT =
   "Key insight: teams spend 40% of meeting-prep time fighting slide tools, not thinking about the argument. " +
   "Our target is B2B teams doing investor decks, board updates, and sales pitches.";
 
-console.log("\n── Calling Gemini (gemini-2.0-flash, JSON mode, 3 slides) …");
+console.log("\n── Calling Gemini (gemini-2.5-flash, JSON mode, 3 slides) …");
 
 const genai = new GoogleGenerativeAI(apiKey);
 const model = genai.getGenerativeModel({
-  model: "gemini-2.0-flash",
+  model: "gemini-2.5-flash",
   generationConfig: { responseMimeType: "application/json" },
 });
 

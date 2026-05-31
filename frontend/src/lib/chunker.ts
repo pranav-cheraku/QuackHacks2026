@@ -19,6 +19,8 @@ export interface HydrateResult {
   edges: Edge[];
   // "gemini" = real LLM ran; "mock" = Gemini unavailable, used paragraph-split fallback.
   source: "gemini" | "mock";
+  // Present only when source === "mock" — the actual error that caused the fallback.
+  mockReason?: string;
 }
 
 export type TargetDuration = 5 | 10 | 20;
@@ -196,6 +198,7 @@ export async function hydrateToSlides(
 
   let chunks: ChunkResult[];
   let source: HydrateResult["source"];
+  let mockReason: string | undefined;
   try {
     chunks = await chunkIntoScenes(text, targetCount);
     source = "gemini";
@@ -204,7 +207,8 @@ export async function hydrateToSlides(
     console.warn("[chunker] Gemini unavailable — mock fallback active.\n  Reason:", errMsg);
     chunks = mockChunkIntoScenes(text, targetCount);
     source = "mock";
+    mockReason = errMsg;
   }
 
-  return { ...buildSlideNodes(chunks), source };
+  return { ...buildSlideNodes(chunks), source, mockReason };
 }

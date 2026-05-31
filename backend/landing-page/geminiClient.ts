@@ -1,38 +1,44 @@
-import { GoogleGenerativeAI, SchemaType } from "@google/generative-ai";
-import type { Schema } from "@google/generative-ai";
+// ── Gemini SDK client ─────────────────────────────────────────────────────────
+//
+// This module is imported ONLY by chunkingAgent.ts, which is imported only by
+// proxyHandler.ts, which is imported only by chunkApi.ts (a createServerFn).
+// The entire import chain is server-side — the Gemini SDK and API key never
+// reach the browser bundle.
+//
+// GEMINI_API_KEY is read from process.env at runtime (Node.js only).
+// It is set in frontend/.env and loaded by Vite's dotenv integration into
+// process.env for server functions. It is NOT prefixed with VITE_ so it is
+// never injected into import.meta.env / the client bundle.
+//
+// ── Module resolution note ────────────────────────────────────────────────────
+// This file imports from "@/server/geminiShim" rather than directly from
+// "@google/generative-ai". See frontend/src/server/geminiShim.ts for the full
+// explanation. Short version: backend/ has no node_modules, so bare specifiers
+// like "@google/generative-ai" can't be resolved by Node from here. The shim
+// re-exports the same symbols from inside frontend/src/, where node_modules IS
+// reachable via Node's upward directory search.
 
+import { GoogleGenerativeAI, SchemaType } from "@/server/geminiShim";
+import type { Schema } from "@/server/geminiShim";
+
+// Singleton client — constructed once per server process on first request.
+// Re-using the same instance avoids repeated key reads and SDK initialisation.
 let _client: GoogleGenerativeAI | null = null;
-let _keyChecked = false;
-
-// Call once on server startup (or on first request) to confirm key presence.
-// Logs status without printing the key value.
-export function verifyGeminiKey(): void {
-  if (_keyChecked) return;
-  _keyChecked = true;
-  const key = process.env.GEMINI_API_KEY;
-  if (!key) {
-    console.error(
-      "[projektor] ❌ GEMINI_API_KEY is not set.\n" +
-      "  Add it to frontend/.env: GEMINI_API_KEY=your_key_here\n" +
-      "  The chunking agent will fall back to mock output until the key is present.",
-    );
-  } else {
-    console.log(
-      `[projektor] ✓ Gemini key loaded (${key.length} chars, starts with ${key.slice(0, 4)}…)`,
-    );
-  }
-}
 
 function getClient(): GoogleGenerativeAI {
   if (_client) return _client;
-  verifyGeminiKey();
   const apiKey = process.env.GEMINI_API_KEY;
   if (!apiKey) throw new Error("[GEMINI_KEY_MISSING] GEMINI_API_KEY is not set — add it to frontend/.env");
   _client = new GoogleGenerativeAI(apiKey);
   return _client;
 }
 
-// JSON response schema — mirrors ChunkResult exactly
+// ── Response schema ───────────────────────────────────────────────────────────
+// Passed to Gemini's generationConfig.responseSchema. This tells Gemini to
+// return ONLY a JSON array of objects matching this shape — no prose, no
+// markdown fences. The SDK enforces the shape server-side before we even see
+// the response, so ChunksResponseSchema.parse() in chunkingAgent.ts is a
+// belt-and-suspenders check rather than the primary guard.
 export const CHUNKING_RESPONSE_SCHEMA: Schema = {
   type: SchemaType.ARRAY,
   items: {
@@ -64,6 +70,8 @@ export const CHUNKING_RESPONSE_SCHEMA: Schema = {
   },
 };
 
+// System instruction sent with every request. Gemini treats this as a
+// persistent context that shapes all output — equivalent to a system prompt.
 const SYSTEM_INSTRUCTION = `You are a presentation architect. Structure raw text into a precise, compelling slide outline.
 
 Semantic chunking rules:
@@ -78,12 +86,16 @@ Semantic chunking rules:
 - Eyebrow: sparingly, ALL CAPS, ≤4 words — use for section transitions only
 - Return ONLY the JSON array. No prose, no markdown fences.`;
 
+// ── MODEL SWAP POINT ──────────────────────────────────────────────────────────
+// To change the model: update the `model` string below.
+// To add safety settings, temperature, topK, etc: add to generationConfig.
+// The responseSchema pins Gemini to the exact shape chunkingAgent.ts expects.
 export function getChunkingModel() {
   return getClient().getGenerativeModel({
-    model: "gemini-2.0-flash",
+    model: "gemini-2.5-flash",
     systemInstruction: SYSTEM_INSTRUCTION,
     generationConfig: {
-      responseMimeType: "application/json",
+      responseMimeType: "application/json",  // forces JSON output mode
       responseSchema: CHUNKING_RESPONSE_SCHEMA,
     },
   });

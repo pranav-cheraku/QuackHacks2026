@@ -76,6 +76,7 @@ export function LandingPage({ onGenerate }: Props) {
   const [isGenerating, setIsGenerating] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [usedMock, setUsedMock] = useState(false);
+  const [mockErrorReason, setMockErrorReason] = useState<string | null>(null);
   const [attachedFiles, setAttachedFiles] = useState<File[]>([]);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
@@ -102,6 +103,7 @@ export function LandingPage({ onGenerate }: Props) {
     }
     setError(null);
     setUsedMock(false);
+    setMockErrorReason(null);
     setIsGenerating(true);
     try {
       // Prepend brand URL as context if provided (not yet used by Gemini agent
@@ -110,7 +112,10 @@ export function LandingPage({ onGenerate }: Props) {
         ? `Brand / company URL: ${brandUrl.trim()}\n\n${text.trim()}`
         : text.trim();
       const result = await hydrateToSlides(fullText, duration);
-      if (result.source === "mock") setUsedMock(true);
+      if (result.source === "mock") {
+        setUsedMock(true);
+        setMockErrorReason(result.mockReason ?? null);
+      }
       onGenerate(result);
     } catch (err) {
       const msg = err instanceof Error ? err.message : "Something went wrong. Try again.";
@@ -284,8 +289,12 @@ export function LandingPage({ onGenerate }: Props) {
 
           {/* Mock-mode notice */}
           {usedMock && !error && (
-            <div className="px-4 py-2.5 rounded-xl bg-amber-50 border border-amber-200 text-[12px] text-amber-700">
-              ⚠ Gemini was unreachable — storyboard built with mock generation. Check your key and restart the dev server.
+            <div className="px-4 py-2.5 rounded-xl bg-amber-50 border border-amber-200 text-[12px] text-amber-700 space-y-1">
+              <div>⚠ Gemini was unreachable — storyboard built with mock generation.</div>
+              {mockErrorReason && (
+                <div className="font-mono text-[11px] opacity-80 break-all">{mockErrorReason}</div>
+              )}
+              <div className="opacity-70">Check your GEMINI_API_KEY in <code>frontend/.env</code> and restart the dev server.</div>
             </div>
           )}
         </div>

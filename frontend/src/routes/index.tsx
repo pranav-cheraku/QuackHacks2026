@@ -20,7 +20,7 @@ export const Route = createFileRoute("/")({
 
 function Projektor() {
   const [mode, setMode] = useState<"board" | "editor">("board");
-  const [zoom, setZoom] = useState(0.92);
+  const [zoom, setZoom] = useState(1);
   const [editorStart, setEditorStart] = useState<string | null>(null);
 
   return (

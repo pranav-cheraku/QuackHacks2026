@@ -5,17 +5,20 @@ import { StatusFilterPanel } from "./StatusFilterPanel";
 import { DraggablePanel } from "./DraggablePanel";
 import { Minimap } from "./Minimap";
 import { SlideCard } from "./SlideCard";
-import { VariantCard } from "./VariantCard";
 import {
   INITIAL_NODES,
   INITIAL_EDGES,
-  INITIAL_VARIANTS,
   type SlideNode,
   type Edge,
-  type Variant,
   type SceneStatus,
 } from "@/lib/projektor-data";
-import { Maximize2, Minus, Plus, Sparkles } from "lucide-react";
+import { Maximize2, Minus, Plus, Wand2 } from "lucide-react";
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipProvider,
+  TooltipTrigger,
+} from "@/components/ui/tooltip";
 
 interface Props {
   zoom: number;
@@ -49,7 +52,6 @@ function anchor(n: SlideNode, side: "right" | "left" | "top" | "bottom") {
 export function BoardView({ zoom, setZoom, onOpenEditor }: Props) {
   const [nodes, setNodes] = useState<SlideNode[]>(INITIAL_NODES);
   const [edges] = useState<Edge[]>(INITIAL_EDGES);
-  const [variants, setVariants] = useState<Variant[]>(INITIAL_VARIANTS);
   const [selected, setSelected] = useState<string | null>("n1");
   const [pan, setPan] = useState({ x: 0, y: 0 });
   const [focusPicked, setFocusPicked] = useState(false);
@@ -78,7 +80,8 @@ export function BoardView({ zoom, setZoom, onOpenEditor }: Props) {
       return next;
     });
 
-  // Auto-tidy: lay the tree out top-down by depth, centered.
+  // Auto-tidy: reformat the tree (top-down by depth) IN PLACE — keep it
+  // centered where it already is so the camera/view doesn't move.
   const autoTidy = () => {
     const childrenMap = new Map<string, string[]>();
     edges.forEach((e) =>
@@ -103,24 +106,39 @@ export function BoardView({ zoom, setZoom, onOpenEditor }: Props) {
       const d = depth.get(n.id) ?? 0;
       levels.set(d, [...(levels.get(d) ?? []), n.id]);
     });
+
     const vGap = 300;
     const hGap = 380;
-    const topY = 80;
-    const centerX = 760;
+
+    // Lay the tidy tree out around the origin first.
+    const raw = nodes.map((n) => {
+      const d = depth.get(n.id) ?? 0;
+      const level = levels.get(d) ?? [n.id];
+      const idx = level.indexOf(n.id);
+      const w = n.width ?? 320;
+      return {
+        id: n.id,
+        x: (idx - (level.length - 1) / 2) * hGap - w / 2,
+        y: d * vGap,
+        w,
+        h: n.height ?? 180,
+      };
+    });
+
+    // Anchor the layout to the ROOT's current position: the root stays
+    // exactly where it is, only the format below it changes. Nothing the
+    // user is looking at jumps, and the camera never moves.
+    const byId = new Map(raw.map((r) => [r.id, r]));
+    const rootNode = nodes.find((n) => !hasParent.has(n.id)) ?? nodes[0];
+    const rootRaw = rootNode ? byId.get(rootNode.id) : undefined;
+    const dx = rootNode && rootRaw ? rootNode.x - rootRaw.x : 0;
+    const dy = rootNode && rootRaw ? rootNode.y - rootRaw.y : 0;
     setNodes((ns) =>
       ns.map((n) => {
-        const d = depth.get(n.id) ?? 0;
-        const level = levels.get(d) ?? [n.id];
-        const idx = level.indexOf(n.id);
-        const w = n.width ?? 320;
-        return {
-          ...n,
-          x: centerX + (idx - (level.length - 1) / 2) * hGap - w / 2,
-          y: topY + d * vGap,
-        };
+        const r = byId.get(n.id);
+        return r ? { ...n, x: r.x + dx, y: r.y + dy } : n;
       }),
     );
-    setPan({ x: 0, y: 0 });
   };
 
   // Outline click → select the node and fly the canvas to center it.
@@ -157,42 +175,40 @@ export function BoardView({ zoom, setZoom, onOpenEditor }: Props) {
     window.addEventListener("mouseup", up);
   };
 
-  const generateVariants = () => {
-    if (!selected) return;
-    const parent = findNode(selected);
-    if (variants.some((v) => v.parentId === selected)) return;
-    const baseY = parent.y + (parent.height ?? 170) + 120;
-    const baseX = parent.x - 60;
-    setVariants((vs) => [
-      ...vs,
-      {
-        id: `v-${selected}-1`,
-        parentId: selected,
-        x: baseX,
-        y: baseY + 10,
-        rotation: -1.5,
-        layout: "stacked",
-        chosen: false,
-      },
-      {
-        id: `v-${selected}-2`,
-        parentId: selected,
-        x: baseX + 180,
-        y: baseY + 30,
-        rotation: 1,
-        layout: "centered",
-        chosen: true,
-      },
-      {
-        id: `v-${selected}-3`,
-        parentId: selected,
-        x: baseX + 360,
-        y: baseY + 5,
-        rotation: -0.5,
-        layout: "split",
-        chosen: false,
-      },
-    ]);
+  // Frame a set of nodes so the whole tree fits in the viewport, with a
+  // generous margin. The zoom is snapped DOWN to a multiple of 5%.
+  const frameNodes = (list: SlideNode[]) => {
+    const vp = viewportRef.current;
+    if (!vp || list.length === 0) return;
+    const pad = 200; // generous margin → zooms out more
+    const minX = Math.min(...list.map((n) => n.x));
+    const minY = Math.min(...list.map((n) => n.y));
+    const maxX = Math.max(...list.map((n) => n.x + (n.width ?? 320)));
+    const maxY = Math.max(...list.map((n) => n.y + (n.height ?? 180)));
+    const spanX = Math.max(1, maxX - minX);
+    const spanY = Math.max(1, maxY - minY);
+    const raw = Math.min(
+      1,
+      (vp.clientWidth - pad * 2) / spanX,
+      (vp.clientHeight - pad * 2) / spanY,
+    );
+    // snap down to a multiple of 5%, clamped to [30%, 100%]
+    const pct = Math.min(100, Math.max(30, Math.floor((raw * 100) / 5) * 5));
+    const z = pct / 100;
+    setZoom(z);
+    setPan({
+      x: vp.clientWidth / 2 - (minX + spanX / 2) * z,
+      y: vp.clientHeight / 2 - (minY + spanY / 2) * z,
+    });
+  };
+
+  // Fit-to-view: move/zoom so the entire tree is visible (no rearrange).
+  const fitToView = () => frameNodes(nodes);
+
+  // Zoom in/out in 5% steps, snapped to multiples of 5.
+  const zoomBy = (dir: number) => {
+    const pct = Math.round((zoom * 100) / 5) * 5;
+    setZoom(Math.min(200, Math.max(30, pct + dir * 5)) / 100);
   };
 
   return (
@@ -289,12 +305,6 @@ export function BoardView({ zoom, setZoom, onOpenEditor }: Props) {
               />
             </div>
           ))}
-
-          {variants.map((v) => (
-            <div key={v.id} data-node>
-              <VariantCard v={v} />
-            </div>
-          ))}
         </div>
 
         {/* Left tool rail */}
@@ -307,7 +317,6 @@ export function BoardView({ zoom, setZoom, onOpenEditor }: Props) {
           onToggleFocus={() => setFocusPicked((v) => !v)}
           minimapOpen={minimapOpen}
           onToggleMinimap={() => setMinimapOpen((v) => !v)}
-          onAutoTidy={autoTidy}
         />
 
         {/* Draggable popovers (independent — can be open together) */}
@@ -354,38 +363,42 @@ export function BoardView({ zoom, setZoom, onOpenEditor }: Props) {
           />
         )}
 
-        {/* Floating toolbar */}
-        <div className="absolute left-1/2 -translate-x-1/2 bottom-5 flex items-center gap-1 bg-chrome border border-border rounded-full shadow-[0_4px_20px_-6px_oklch(0.4_0.01_175/0.25)] px-1.5 py-1.5">
-          <ToolBtn onClick={() => setZoom(Math.max(0.3, zoom - 0.05))}>
-            <Minus size={13} />
-          </ToolBtn>
-          <span className="px-2 text-[11px] font-mono w-12 text-center">
-            {Math.round(zoom * 100)}%
-          </span>
-          <ToolBtn onClick={() => setZoom(Math.min(2, zoom + 0.05))}>
-            <Plus size={13} />
-          </ToolBtn>
-          <div className="w-px h-5 bg-border mx-1" />
-          <ToolBtn
-            onClick={() => {
-              setZoom(0.92);
-              setPan({ x: 0, y: 0 });
-            }}
+        {/* Floating zoom pill */}
+        <TooltipProvider
+          delayDuration={100}
+          skipDelayDuration={0}
+          disableHoverableContent
+        >
+          <div
+            className="absolute left-1/2 -translate-x-1/2 bottom-5 flex items-center gap-1 bg-chrome border border-border rounded-full shadow-[var(--sh-v)] px-1.5 py-1.5"
+            onMouseDown={(e) => e.stopPropagation()}
           >
-            <Maximize2 size={13} />
-          </ToolBtn>
-          <div className="w-px h-5 bg-border mx-1" />
-          <button className="px-3 py-1.5 text-[12px] font-semibold rounded-full hover:bg-canvas/60 transition-colors flex items-center gap-1">
-            <Plus size={12} /> Add slide
-          </button>
-          <button
-            onClick={generateVariants}
-            className="px-3 py-1.5 text-[12px] font-semibold rounded-full text-white transition-opacity hover:opacity-90 flex items-center gap-1.5 ml-1"
-            style={{ background: "var(--accent-teal)" }}
-          >
-            <Sparkles size={12} /> Generate variants
-          </button>
-        </div>
+            <ToolBtn label="Zoom out" tip="Zoom out" onClick={() => zoomBy(-1)}>
+              <Minus size={14} />
+            </ToolBtn>
+            <span className="px-2 text-[12px] font-mono w-12 text-center tabular-nums">
+              {Math.round(zoom * 100)}%
+            </span>
+            <ToolBtn label="Zoom in" tip="Zoom in" onClick={() => zoomBy(1)}>
+              <Plus size={14} />
+            </ToolBtn>
+            <div className="w-px h-5 bg-border mx-1" />
+            <ToolBtn
+              label="Auto-tidy"
+              tip="Auto-tidy — rearrange the tree neatly"
+              onClick={autoTidy}
+            >
+              <Wand2 size={14} />
+            </ToolBtn>
+            <ToolBtn
+              label="Fit to view"
+              tip="Fit to view — zoom so the whole tree is visible"
+              onClick={fitToView}
+            >
+              <Maximize2 size={14} />
+            </ToolBtn>
+          </div>
+        </TooltipProvider>
       </div>
     </div>
   );
@@ -393,17 +406,34 @@ export function BoardView({ zoom, setZoom, onOpenEditor }: Props) {
 
 function ToolBtn({
   children,
+  label,
+  tip,
   onClick,
 }: {
   children: React.ReactNode;
+  label: string;
+  tip: string;
   onClick?: () => void;
 }) {
   return (
-    <button
-      onClick={onClick}
-      className="w-7 h-7 flex items-center justify-center rounded-full hover:bg-canvas/60 transition-colors text-ink"
-    >
-      {children}
-    </button>
+    <Tooltip>
+      <TooltipTrigger asChild>
+        <button
+          type="button"
+          aria-label={label}
+          onClick={onClick}
+          className="w-7 h-7 flex items-center justify-center rounded-full hover:bg-canvas/60 transition-colors text-ink"
+        >
+          {children}
+        </button>
+      </TooltipTrigger>
+      <TooltipContent
+        side="top"
+        sideOffset={8}
+        className="bg-ink text-white border-0 font-medium"
+      >
+        {tip}
+      </TooltipContent>
+    </Tooltip>
   );
 }

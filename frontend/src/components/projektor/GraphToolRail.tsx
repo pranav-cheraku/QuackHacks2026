@@ -1,10 +1,4 @@
-import {
-  ListTree,
-  Route,
-  ListFilter,
-  Wand2,
-  Map as MapIcon,
-} from "lucide-react";
+import { ListTree, Route, ListFilter, Map as MapIcon } from "lucide-react";
 import {
   Tooltip,
   TooltipContent,
@@ -21,7 +15,6 @@ interface Props {
   onToggleFocus: () => void;
   minimapOpen: boolean;
   onToggleMinimap: () => void;
-  onAutoTidy: () => void;
 }
 
 // Floating left rail — canvas navigation/view tools only (per graph_view_spec;
@@ -36,10 +29,13 @@ export function GraphToolRail({
   onToggleFocus,
   minimapOpen,
   onToggleMinimap,
-  onAutoTidy,
 }: Props) {
   return (
-    <TooltipProvider delayDuration={150}>
+    <TooltipProvider
+      delayDuration={100}
+      skipDelayDuration={0}
+      disableHoverableContent
+    >
       <div
         className="absolute left-4 top-1/2 -translate-y-1/2 z-10 flex flex-col items-center gap-1 p-1.5 rounded-2xl bg-chrome border border-border shadow-[var(--sh-v)]"
         onMouseDown={(e) => e.stopPropagation()}
@@ -71,13 +67,6 @@ export function GraphToolRail({
 
         <div className="w-5 h-px bg-border my-0.5" />
 
-        <RailButton
-          label="Auto-tidy"
-          tip="Auto-tidy — arrange the tree"
-          onClick={onAutoTidy}
-        >
-          <Wand2 size={18} />
-        </RailButton>
         <RailButton
           label="Minimap"
           tip="Minimap — overview of the graph"

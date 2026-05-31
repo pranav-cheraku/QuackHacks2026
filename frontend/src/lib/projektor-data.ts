@@ -62,16 +62,6 @@ export interface Edge {
   dashed?: boolean;
 }
 
-export interface Variant {
-  id: string;
-  parentId: string;
-  x: number;
-  y: number;
-  rotation: number;
-  layout: "stacked" | "split" | "centered";
-  chosen?: boolean;
-}
-
 export const INITIAL_NODES: SlideNode[] = [
   {
     id: "n1",
@@ -94,8 +84,8 @@ export const INITIAL_NODES: SlideNode[] = [
     title: "The problem we avoid",
     kind: "problem",
     status: "draft",
-    x: 220,
-    y: 410,
+    x: 390,
+    y: 370,
     width: 300,
     height: 180,
     state: "ingredient",
@@ -107,8 +97,8 @@ export const INITIAL_NODES: SlideNode[] = [
     title: "Pipeline → revenue",
     kind: "data",
     status: "in-review",
-    x: 840,
-    y: 410,
+    x: 760,
+    y: 370,
     width: 320,
     height: 180,
     state: "rendered",
@@ -120,5 +110,3 @@ export const INITIAL_EDGES: Edge[] = [
   { from: "n1", to: "n2", relation: "contrasts" },
   { from: "n1", to: "n3", relation: "supports" },
 ];
-
-export const INITIAL_VARIANTS: Variant[] = [];

@@ -1,4 +1,4 @@
-import { Check, RefreshCw } from "lucide-react";
+import { Check } from "lucide-react";
 import { useRef } from "react";
 import type { SlideNode, SceneKind, SceneStatus } from "@/lib/projektor-data";
 
@@ -105,26 +105,8 @@ export function SlideCard({
         </div>
 
         {/* Preview */}
-        <div className="px-4 pt-3">
+        <div className="px-4 pt-3 pb-4">
           <Preview node={node} />
-        </div>
-
-        {/* Generate (selected only) */}
-        <div className="px-4 pb-3.5 pt-3 flex justify-end">
-          {selected ? (
-            <button
-              data-no-drag
-              className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md text-[12px] font-semibold transition-opacity hover:opacity-90"
-              style={{
-                background: "var(--accent-soft)",
-                color: "var(--accent)",
-              }}
-            >
-              <RefreshCw size={12} /> Generate
-            </button>
-          ) : (
-            <div className="h-[26px]" />
-          )}
         </div>
       </div>
 

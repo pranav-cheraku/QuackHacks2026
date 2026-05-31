@@ -1,32 +1,23 @@
 import { useState } from "react";
 import {
-  AlignLeft,
-  BarChart3,
   Check,
   ChevronDown,
-  Hash,
-  Heading,
-  Heading2,
-  Image as ImageIcon,
-  List as ListIcon,
+  ChevronRight,
   Lock,
-  Plus,
-  Quote,
   RotateCcw,
   Sparkles,
   Trash2,
   Unlock,
-  Video,
   X,
 } from "lucide-react";
 import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
-  DropdownMenuLabel,
-  DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
+import { AddContentMenu } from "./AddContentMenu";
+import { blockIcon } from "@/lib/content-blocks";
 import type {
   ComponentType,
   EdgeRelation,
@@ -48,6 +39,7 @@ interface Props {
   onToggleLock: (id: string) => void;
   onAddBlock: (id: string, type: ComponentType) => void;
   onRemoveBlock: (id: string, blockId: string) => void;
+  onOpenContent: (id: string) => void;
   onAccept: (id: string) => void;
   onDiscard: (id: string) => void;
   onReconsider: (id: string) => void;
@@ -73,33 +65,6 @@ const RELATION_OPTIONS: { value: EdgeRelation; label: string }[] = [
   { value: "sequence", label: "Sequence" },
 ];
 
-// "+ Add content" menu (spec): Text group + Media group.
-const ADD_TEXT: { type: ComponentType; label: string }[] = [
-  { type: "Header", label: "Header" },
-  { type: "Subheader", label: "Subheader" },
-  { type: "Body", label: "Body" },
-  { type: "List", label: "Bullet list" },
-  { type: "Stat", label: "Stat / number" },
-  { type: "Quote", label: "Quote" },
-];
-const ADD_MEDIA: { type: ComponentType; label: string }[] = [
-  { type: "Image", label: "Image" },
-  { type: "Video", label: "Video" },
-  { type: "Chart", label: "Chart" },
-];
-
-const BLOCK_ICON: Partial<Record<ComponentType, typeof Heading>> = {
-  Header: Heading,
-  Subheader: Heading2,
-  Body: AlignLeft,
-  List: ListIcon,
-  Stat: Hash,
-  Quote: Quote,
-  Image: ImageIcon,
-  Video: Video,
-  Chart: BarChart3,
-};
-
 // Floating right panel: everything about the one selected scene. Lives inside
 // the canvas viewport as an absolute sibling, so it doesn't pan with the canvas.
 export function ScenePanel({
@@ -113,6 +78,7 @@ export function ScenePanel({
   onToggleLock,
   onAddBlock,
   onRemoveBlock,
+  onOpenContent,
   onAccept,
   onDiscard,
   onReconsider,
@@ -210,6 +176,7 @@ export function ScenePanel({
           onToggleLock={onToggleLock}
           onAddBlock={onAddBlock}
           onRemoveBlock={onRemoveBlock}
+          onOpenContent={onOpenContent}
         />
       ) : (
         <StubTab tab={tab} title={node.title} />
@@ -228,6 +195,7 @@ function InspectTab({
   onToggleLock,
   onAddBlock,
   onRemoveBlock,
+  onOpenContent,
 }: {
   node: SlideNode;
   parentRelation: EdgeRelation | null;
@@ -238,6 +206,7 @@ function InspectTab({
   onToggleLock: (id: string) => void;
   onAddBlock: (id: string, type: ComponentType) => void;
   onRemoveBlock: (id: string, blockId: string) => void;
+  onOpenContent: (id: string) => void;
 }) {
   const status = STATUS_OPTIONS.find((o) => o.value === node.status)!;
   const role = node.role ?? "claim";
@@ -366,50 +335,18 @@ function InspectTab({
 
         <div className="h-px bg-line-soft" />
 
-        {/* Content blocks */}
+        {/* Content blocks — header opens the scene's content graph */}
         <div>
           <div className="flex items-center justify-between mb-2">
-            <span className="text-[12px] font-semibold text-ink">
+            <button
+              type="button"
+              onClick={() => onOpenContent(node.id)}
+              className="flex items-center gap-1 text-[12px] font-semibold text-ink hover:text-accent transition-colors"
+            >
               Content blocks
-            </span>
-            <DropdownMenu>
-              <DropdownMenuTrigger asChild>
-                <button
-                  type="button"
-                  className="flex items-center gap-1 px-2 py-1 rounded-md text-[12px] font-semibold text-accent hover:bg-accent-soft/60 transition-colors"
-                >
-                  <Plus size={12} /> Add content
-                </button>
-              </DropdownMenuTrigger>
-              <DropdownMenuContent
-                align="end"
-                className="min-w-[176px] bg-chrome border-border"
-              >
-                <DropdownMenuLabel className="text-[10px] font-mono uppercase tracking-wider text-muted-foreground">
-                  Text
-                </DropdownMenuLabel>
-                {ADD_TEXT.map((o) => (
-                  <AddRow
-                    key={o.type}
-                    type={o.type}
-                    label={o.label}
-                    onSelect={() => onAddBlock(node.id, o.type)}
-                  />
-                ))}
-                <DropdownMenuSeparator className="bg-line-soft" />
-                <DropdownMenuLabel className="text-[10px] font-mono uppercase tracking-wider text-muted-foreground">
-                  Media
-                </DropdownMenuLabel>
-                {ADD_MEDIA.map((o) => (
-                  <AddRow
-                    key={o.type}
-                    type={o.type}
-                    label={o.label}
-                    onSelect={() => onAddBlock(node.id, o.type)}
-                  />
-                ))}
-              </DropdownMenuContent>
-            </DropdownMenu>
+              <ChevronRight size={13} className="text-muted-foreground" />
+            </button>
+            <AddContentMenu onAdd={(type) => onAddBlock(node.id, type)} />
           </div>
 
           {blocks.length === 0 ? (
@@ -419,7 +356,7 @@ function InspectTab({
           ) : (
             <div className="space-y-1.5">
               {blocks.map((b) => {
-                const Icon = BLOCK_ICON[b.type] ?? AlignLeft;
+                const Icon = blockIcon(b.type);
                 return (
                   <div
                     key={b.id}
@@ -613,27 +550,6 @@ function MenuRow({
       className="gap-1.5 text-[13px] cursor-pointer focus:bg-canvas focus:text-ink"
     >
       {children}
-    </DropdownMenuItem>
-  );
-}
-
-function AddRow({
-  type,
-  label,
-  onSelect,
-}: {
-  type: ComponentType;
-  label: string;
-  onSelect: () => void;
-}) {
-  const Icon = BLOCK_ICON[type] ?? AlignLeft;
-  return (
-    <DropdownMenuItem
-      onSelect={onSelect}
-      className="gap-2 text-[13px] cursor-pointer focus:bg-canvas focus:text-ink"
-    >
-      <Icon size={14} className="text-muted-foreground" />
-      {label}
     </DropdownMenuItem>
   );
 }

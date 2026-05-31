@@ -7,6 +7,7 @@ import { Minimap } from "./Minimap";
 import { ScenePanel } from "./ScenePanel";
 import { GhostCard } from "./GhostCard";
 import { GenerateNode } from "./GenerateNode";
+import { ContentGraphView } from "./ContentGraphView";
 import { SlideCard } from "./SlideCard";
 import {
   INITIAL_NODES,
@@ -166,6 +167,7 @@ export function BoardView({ zoom, setZoom, onOpenEditor }: Props) {
   const [edges, setEdges] = useState<Edge[]>(INITIAL_EDGES);
   const [selected, setSelected] = useState<string | null>("n1");
   const [inspectorOpen, setInspectorOpen] = useState(true);
+  const [contentSceneId, setContentSceneId] = useState<string | null>(null);
   const [pan, setPan] = useState({ x: 0, y: 0 });
   const [focusPicked, setFocusPicked] = useState(false);
   const [outlineOpen, setOutlineOpen] = useState(false);
@@ -427,6 +429,23 @@ export function BoardView({ zoom, setZoom, onOpenEditor }: Props) {
     setZoom(Math.min(200, Math.max(30, pct + dir * 5)) / 100);
   };
 
+  // Drilling into a scene's content swaps the whole board for its content graph.
+  const contentScene = contentSceneId
+    ? (nodes.find((n) => n.id === contentSceneId) ?? null)
+    : null;
+  if (contentScene) {
+    return (
+      <div className="flex-1 flex flex-col min-w-0 relative">
+        <ContentGraphView
+          scene={contentScene}
+          onBack={() => setContentSceneId(null)}
+          onAddBlock={addBlock}
+          onRemoveBlock={removeBlock}
+        />
+      </div>
+    );
+  }
+
   return (
     <div className="flex-1 flex flex-col min-w-0 relative">
       {/* Canvas */}
@@ -646,6 +665,7 @@ export function BoardView({ zoom, setZoom, onOpenEditor }: Props) {
             onToggleLock={toggleLock}
             onAddBlock={addBlock}
             onRemoveBlock={removeBlock}
+            onOpenContent={setContentSceneId}
             onAccept={acceptGhost}
             onDiscard={discardGhost}
             onReconsider={reconsiderGhost}

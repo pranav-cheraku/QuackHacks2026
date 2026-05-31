@@ -37,6 +37,9 @@ interface Props {
   onOpenEditor: (nodeId: string) => void;
   initialNodes?: SlideNode[];
   initialEdges?: Edge[];
+  // Layout updates from EditorView (via index.tsx). BoardView merges the slide-layout
+  // fields (root, candidates, activeDesignId) so its auto-save includes the latest IR.
+  externalSlides?: SlideNode[];
 }
 
 // Placeholder chosen spine — real pick logic lands with the branch model.
@@ -181,6 +184,7 @@ export function BoardView({
   onOpenEditor,
   initialNodes,
   initialEdges,
+  externalSlides,
 }: Props) {
   const [nodes, setNodes] = useState<SlideNode[]>(
     initialNodes ?? INITIAL_NODES,
@@ -239,6 +243,24 @@ export function BoardView({
   const saveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [generatingFor, setGeneratingFor] = useState<string | null>(null);
   const { currentUser } = useAuth();
+
+  // Merge slide-layout fields from EditorView whenever they change. BoardView owns
+  // graph-structure fields (x, y, kind, status, blocks…); EditorView owns layout
+  // fields (root, candidates, activeDesignId). This keeps both in the same Firestore
+  // document without either view overwriting the other's fields.
+  const externalSlidesRef = useRef(externalSlides);
+  useEffect(() => {
+    if (!externalSlides || externalSlides === externalSlidesRef.current) return;
+    externalSlidesRef.current = externalSlides;
+    setNodes((prev) =>
+      prev.map((n) => {
+        const ext = externalSlides.find((e) => e.id === n.id);
+        if (!ext) return n;
+        if (n.root === ext.root && n.activeDesignId === ext.activeDesignId) return n;
+        return { ...n, root: ext.root, candidates: ext.candidates, activeDesignId: ext.activeDesignId };
+      }),
+    );
+  }, [externalSlides]);
 
   // Load deck from Firestore on mount. Only runs for the default board (no custom
   // deck passed via props) — generated decks must not be overwritten on load.

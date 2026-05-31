@@ -1,11 +1,12 @@
 import { createFileRoute, useNavigate } from "@tanstack/react-router";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { TopBar } from "@/components/projektor/TopBar";
 import { BoardView } from "@/components/projektor/BoardView";
 import { EditorView } from "@/components/projektor/EditorView";
 import { LandingPage } from "@/components/projektor/LandingPage";
 import { INITIAL_NODES, INITIAL_EDGES, type SlideNode, type Edge } from "@/lib/projektor-data";
 import { createDeck, getDeck } from "@/lib/deckStore";
+import { loadDeck, saveDeck } from "@/lib/firestore-slides";
 import type { HydrateResult } from "@/lib/chunker";
 import { useAuth } from "@/context/AuthContext";
 import { DEFAULT_ZOOM, ZOOM_STEP, clampZoom, zoomBy } from "@/lib/viewport";
@@ -44,12 +45,62 @@ function Projektor() {
   const [zoom, setZoomState] = useState(DEFAULT_ZOOM);
   const [isGridVisible, setIsGridVisible] = useState(false);
   const [editorStart, setEditorStart] = useState<string | null>(null);
+  // True once deck is hydrated from Firestore (or session store). EditorView uses
+  // this signal to re-init its history from the loaded deck (fires at most once).
+  const [deckLoaded, setDeckLoaded] = useState(!!savedDeck);
+  const saveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   useEffect(() => {
     if (!loading && !currentUser) {
       navigate({ to: "/signin" });
     }
   }, [loading, currentUser, navigate]);
+
+  // Pre-load the user's persisted deck from Firestore on first auth so that
+  // EditorView and BoardView can initialize from it without an extra round-trip.
+  // IMPORTANT: does NOT change `phase` — the landing page is always shown for
+  // a bare `/` navigation (no ?deckId=). The user explicitly generates to enter
+  // the board. Changing phase here would bypass the landing page for returning
+  // users and break "create a new project".
+  useEffect(() => {
+    if (!currentUser || savedDeck) return;
+    loadDeck(currentUser.uid)
+      .then((saved) => {
+        if (saved && saved.nodes.length > 0) {
+          setDeck(saved.nodes);
+          setDeckEdges(saved.edges);
+          // phase stays "landing" — user must generate to enter the board.
+        }
+      })
+      .catch((err) => console.error("[index] Failed to load deck:", err))
+      .finally(() => setDeckLoaded(true));
+  // Run once per auth session — savedDeck is captured in closure at mount time.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [currentUser]);
+
+  // Auto-save the shared deck to Firestore whenever EditorView changes it.
+  // BoardView has its own save for graph-structure changes; this covers
+  // slide-layout writes (root, candidates, activeDesignId) from EditorView.
+  // Only runs in "app" phase — not during the pre-load on the landing page.
+  useEffect(() => {
+    if (!currentUser || !deckLoaded || phase !== "app") return;
+    if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
+    saveTimerRef.current = setTimeout(() => {
+      saveDeck(currentUser.uid, deck, deckEdges).catch((err) =>
+        console.error("[index] Failed to save deck:", err),
+      );
+    }, 1500);
+    return () => { if (saveTimerRef.current) clearTimeout(saveTimerRef.current); };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [deck, deckEdges, currentUser, deckLoaded, phase]);
+
+  // Callback for EditorView: receives slide-layout updates and merges them into
+  // the shared deck. Also picked up by BoardView via externalSlides so graph
+  // nodes' root fields stay fresh without a Firestore round-trip.
+  const handleDeckChange = (nodes: SlideNode[], edges: Edge[]) => {
+    setDeck(nodes);
+    setDeckEdges(edges);
+  };
 
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
@@ -77,6 +128,7 @@ function Projektor() {
     createDeck(nodes, edges);
     setDeck(nodes);
     setDeckEdges(edges);
+    setDeckLoaded(true); // signal EditorView to re-init from the freshly generated deck
     setEditorStart(null);
     setMode("board");
     setPhase("app");
@@ -99,6 +151,7 @@ function Projektor() {
         <BoardView
           initialNodes={deck}
           initialEdges={deckEdges}
+          externalSlides={deck}
           zoom={zoom}
           setZoom={setZoom}
           onOpenEditor={(id) => {
@@ -112,6 +165,10 @@ function Projektor() {
         style={{ display: mode === "editor" ? undefined : "none" }}
       >
         <EditorView
+          nodes={deck}
+          edges={deckEdges}
+          onDeckChange={handleDeckChange}
+          deckLoaded={deckLoaded}
           startNodeId={editorStart}
           zoom={zoom}
           setZoom={setZoom}

@@ -1,5 +1,4 @@
 import { useState, useEffect, useRef, useCallback, useReducer } from "react";
-import { loadSlides, saveSlide, seedSlides, deleteSlideDoc } from "@/lib/firestore-slides";
 import type React from "react";
 import {
   Undo2, Redo2, Italic, Underline,
@@ -9,7 +8,6 @@ import {
   Paperclip, Mic, Send, LayoutTemplate,
   Layers, Grid3x3, Trash2, Copy,
 } from "lucide-react";
-import { INITIAL_NODES, INITIAL_EDGES } from "@/lib/projektor-data";
 import type { SlideNode, Edge } from "@/lib/projektor-data";
 import { SlideThumb } from "./SlideThumb";
 import { GridOverlay } from "./GridOverlay";
@@ -76,6 +74,13 @@ function historyReducer(state: History, action: HistoryAction): History {
 }
 
 interface Props {
+  // ── Shared deck (single source of truth) ─────────────────────────────────
+  // Passed from index.tsx so both Graph View and Slide View project the same IR.
+  nodes: SlideNode[];
+  edges: Edge[];
+  onDeckChange: (nodes: SlideNode[], edges: Edge[]) => void;
+  deckLoaded: boolean; // true once Firestore hydration is complete
+  // ─────────────────────────────────────────────────────────────────────────
   startNodeId: string | null;
   zoom: number;
   setZoom: (zoom: number) => void;
@@ -107,22 +112,33 @@ function makeSceneId(): string {
 
 // ─── EditorView ───────────────────────────────────────────────────────────────
 export function EditorView({
+  nodes,
+  edges: deckEdges,
+  onDeckChange,
+  deckLoaded,
   startNodeId,
   zoom,
   setZoom,
   isGridVisible,
   toggleGrid,
 }: Props) {
+  // ── History reducer — initialized from the shared deck (not Firestore directly) ──
+  // SLIDE-DESIGN AGENT: `candidates` on each node = AI-generated layout alternatives
+  // for that box's content. Currently populated from SLIDE_CANDIDATES (static fallback).
+  // Gemini swap point: replace SLIDE_CANDIDATES[n.id] with the result of calling the
+  // slide-design agent with n.blocks (box content) → candidate layouts.
+  // Input: n.blocks[] (ContentBlock[]) — the graph node's raw content ingredients.
+  // Output: SlideCandidate[] — rendered layout trees to surface in the Designs panel.
   const [{ past, present: slides, future }, dispatch] = useReducer(
     historyReducer,
-    null,
-    (): History => ({
+    nodes,
+    (initialNodes): History => ({
       past: [],
-      present: INITIAL_NODES.map((n) => ({
+      present: initialNodes.map((n) => ({
         ...n,
-        root:          INITIAL_IR_SLIDES[n.id] ?? emptyRoot(n.id),
-        candidates:    SLIDE_CANDIDATES[n.id]  ?? [],
-        activeDesignId: SLIDE_CANDIDATES[n.id]?.[0]?.id ?? null,
+        root:           n.root          ?? INITIAL_IR_SLIDES[n.id] ?? emptyRoot(n.id),
+        candidates:     n.candidates    ?? SLIDE_CANDIDATES[n.id]  ?? [],
+        activeDesignId: n.activeDesignId ?? SLIDE_CANDIDATES[n.id]?.[0]?.id ?? null,
       })),
       future: [],
     })
@@ -130,38 +146,45 @@ export function EditorView({
   const canUndo = past.length > 0;
   const canRedo = future.length > 0;
 
-  // GRAPH SYNC: narrative edges live alongside slides in deck state. Graph View renders
-  // these as directed connectors between nodes; Slides View currently ignores them.
-  // Both views must read from this single edges state — no parallel copy elsewhere.
-  const [edges, setEdges] = useState<Edge[]>(INITIAL_EDGES);
+  // GRAPH SYNC: edges live in the shared deck. Local copy is initialized from props;
+  // when EditorView prunes edges (on deleteSlide) it writes back via onDeckChange.
+  const [localEdges, setLocalEdges] = useState<Edge[]>(deckEdges);
 
-  const [firestoreReady, setFirestoreReady] = useState(false);
-
-  // On mount: load slides from Firestore. If the collection is empty (first run),
-  // seed it from the static defaults and use those.
+  // Re-initialize the history when the deck is first loaded from Firestore (fires at
+  // most once per session, guarded by hasInitialized). This ensures EditorView always
+  // shows the same nodes as the graph — no divergent state.
+  const hasInitialized = useRef(false);
   useEffect(() => {
-    loadSlides().then(async (remote) => {
-      if (remote) {
-        dispatch({ type: "init", slides: remote });
-        setActiveId(remote[0]?.id ?? "n1");
-      } else {
-        const defaults = INITIAL_NODES.map((n) => ({
-          ...n,
-          root:          INITIAL_IR_SLIDES[n.id] ?? emptyRoot(n.id),
-          candidates:    SLIDE_CANDIDATES[n.id]  ?? [],
-          activeDesignId: SLIDE_CANDIDATES[n.id]?.[0]?.id ?? null,
-        }));
-        await seedSlides(defaults);
-        dispatch({ type: "init", slides: defaults });
-      }
-      setFirestoreReady(true);
-    }).catch((err) => {
-      console.error("[firestore] Failed to load slides:", err);
-      setFirestoreReady(true); // fall back to in-memory defaults
-    });
-  }, []);
+    if (!deckLoaded || hasInitialized.current) return;
+    hasInitialized.current = true;
+    const hydratedSlides = nodes.map((n) => ({
+      ...n,
+      root:           n.root          ?? INITIAL_IR_SLIDES[n.id] ?? emptyRoot(n.id),
+      candidates:     n.candidates    ?? SLIDE_CANDIDATES[n.id]  ?? [],
+      activeDesignId: n.activeDesignId ?? SLIDE_CANDIDATES[n.id]?.[0]?.id ?? null,
+    }));
+    dispatch({ type: "init", slides: hydratedSlides });
+    setLocalEdges(deckEdges);
+    setActiveId(hydratedSlides[0]?.id ?? "n1");
+  // Run once when deckLoaded flips to true — nodes/deckEdges are stable at that point.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [deckLoaded]);
 
-  const [activeId, setActiveId] = useState(startNodeId ?? "n1");
+  // Write-back: whenever slides or edges change, push the updated deck to index.tsx.
+  // index.tsx debounces and saves to Firestore; BoardView picks up layout changes via
+  // externalSlides. This is the EDITOR → shared deck sync path.
+  const onDeckChangeRef = useRef(onDeckChange);
+  onDeckChangeRef.current = onDeckChange;
+  const deckSyncTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  useEffect(() => {
+    if (deckSyncTimerRef.current) clearTimeout(deckSyncTimerRef.current);
+    deckSyncTimerRef.current = setTimeout(() => {
+      onDeckChangeRef.current(slides, localEdges);
+    }, 300);
+    return () => { if (deckSyncTimerRef.current) clearTimeout(deckSyncTimerRef.current); };
+  }, [slides, localEdges]);
+
+  const [activeId, setActiveId] = useState(() => startNodeId ?? nodes[0]?.id ?? "n1");
   const [selectedElId, setSelectedElId] = useState<string | null>(null);
   const [editingElId, setEditingElId] = useState<string | null>(null);
   const [railSelectionActive, setRailSelectionActive] = useState(true);
@@ -187,16 +210,13 @@ export function EditorView({
   }, [startNodeId, slides]);
 
   // ── Helpers ──────────────────────────────────────────────────────────────
+  // Slide edits flow through here → historyReducer → slides state changes →
+  // the write-back useEffect above syncs to onDeckChange (→ index.tsx → Firestore).
   const updateSlide = useCallback(
     (slideId: string, fn: (s: SlideNode) => SlideNode) =>
       dispatch({
         type: "commit",
-        updater: (prev) => prev.map((s) => {
-          if (s.id !== slideId) return s;
-          const next = fn(s);
-          saveSlide(next).catch((err) => console.error("[firestore] saveSlide failed:", err));
-          return next;
-        }),
+        updater: (prev) => prev.map((s) => (s.id !== slideId ? s : fn(s))),
       }),
     []
   );
@@ -269,7 +289,6 @@ export function EditorView({
     // GRAPH SYNC: adding a slide = adding a node. The graph reads from the same slides
     // state and will display it as a new node without any extra wiring.
     dispatch({ type: "commit", updater: (prev) => [...prev, newSlide] });
-    saveSlide(newSlide).catch((err) => console.error("[firestore] saveSlide failed:", err));
     setActiveId(id);
     setSelectedElId(null);
     setEditingElId(null);
@@ -289,8 +308,7 @@ export function EditorView({
     // GRAPH SYNC: deleting a slide = removing a node. Prune edges referencing this scene
     // now so the graph never encounters dangling connectors when it reads this state.
     dispatch({ type: "commit", updater: (prev) => reindexSlides(prev.filter((s) => s.id !== id)) });
-    setEdges((prev) => prev.filter((e) => e.from !== id && e.to !== id));
-    deleteSlideDoc(id).catch((err) => console.error("[firestore] deleteSlideDoc failed:", err));
+    setLocalEdges((prev) => prev.filter((e) => e.from !== id && e.to !== id));
   }, [slides]);
 
   const selectSlideFromRail = useCallback((id: string) => {
@@ -390,14 +408,6 @@ export function EditorView({
   }, [activeId, updateSlide]);
 
   // ── Render ────────────────────────────────────────────────────────────────
-  if (!firestoreReady) {
-    return (
-      <div className="flex-1 flex items-center justify-center bg-canvas/60">
-        <p className="text-[12px] font-mono text-muted-foreground">Loading slides…</p>
-      </div>
-    );
-  }
-
   return (
     <div
       className="flex-1 flex flex-col min-h-0 bg-chrome"

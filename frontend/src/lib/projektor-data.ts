@@ -41,6 +41,7 @@ export interface SlideNode {
   thumb: "title" | "stats" | "chart" | "list" | "closing";
   width?: number;
   height?: number;
+  elements: import("./slide-model").SlideElement[];
 }
 
 export interface Edge {
@@ -72,6 +73,7 @@ export const INITIAL_NODES: SlideNode[] = [
     thumb: "title",
     width: 280,
     height: 170,
+    elements: [],
   },
   {
     id: "n2",
@@ -85,6 +87,7 @@ export const INITIAL_NODES: SlideNode[] = [
     thumb: "stats",
     width: 280,
     height: 170,
+    elements: [],
   },
   {
     id: "n3",
@@ -98,6 +101,7 @@ export const INITIAL_NODES: SlideNode[] = [
     thumb: "title",
     width: 260,
     height: 220,
+    elements: [],
   },
   {
     id: "n4",
@@ -111,6 +115,7 @@ export const INITIAL_NODES: SlideNode[] = [
     thumb: "chart",
     width: 280,
     height: 170,
+    elements: [],
   },
   {
     id: "n5",
@@ -124,6 +129,7 @@ export const INITIAL_NODES: SlideNode[] = [
     thumb: "list",
     width: 280,
     height: 170,
+    elements: [],
   },
   {
     id: "n6",
@@ -137,6 +143,7 @@ export const INITIAL_NODES: SlideNode[] = [
     thumb: "closing",
     width: 280,
     height: 170,
+    elements: [],
   },
 ];
 

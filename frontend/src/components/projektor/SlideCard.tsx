@@ -8,7 +8,7 @@ interface Props {
   dimmed?: boolean;
   /** Highlight as the live drop target while an arrow is being re-wired. */
   dropTarget?: boolean;
-  onSelect: () => void;
+  onSelect: (shiftKey: boolean) => void;
   onOpenEditor: () => void;
   onMove: (x: number, y: number) => void;
   /** Reports the card's real rendered height so edges anchor flush to it. */
@@ -71,7 +71,7 @@ export function SlideCard({
   const onMouseDown = (e: React.MouseEvent) => {
     if ((e.target as HTMLElement).closest("[data-no-drag]")) return;
     e.stopPropagation();
-    onSelect();
+    onSelect(e.shiftKey);
     dragging.current = { ox: e.clientX, oy: e.clientY };
     const startX = node.x;
     const startY = node.y;

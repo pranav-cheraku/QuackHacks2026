@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import {
   AlignLeft,
   BarChart3,
@@ -11,6 +11,7 @@ import {
   Lock,
   Plus,
   Quote,
+  Send,
   Sparkles,
   Unlock,
   Video,
@@ -163,6 +164,8 @@ export function ScenePanel({
         <div className="flex-1 flex items-center justify-center px-6 text-center text-[13px] text-muted-foreground">
           Select a scene to inspect it.
         </div>
+      ) : tab === "chat" ? (
+        <ChatTab title={node.title} />
       ) : tab === "inspect" ? (
         <InspectTab
           node={node}
@@ -425,6 +428,97 @@ function InspectTab({
         >
           <Sparkles size={14} /> Generate scene
         </button>
+      </div>
+    </div>
+  );
+}
+
+interface ChatMessage {
+  id: string;
+  role: "user" | "agent";
+  content: string;
+}
+
+function ChatTab({ title }: { title: string }) {
+  const [messages, setMessages] = useState<ChatMessage[]>([]);
+  const [draft, setDraft] = useState("");
+  const listRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (listRef.current)
+      listRef.current.scrollTop = listRef.current.scrollHeight;
+  }, [messages]);
+
+  const submit = () => {
+    const text = draft.trim();
+    if (!text) return;
+    setMessages((prev) => [
+      ...prev,
+      { id: `msg-${Date.now()}`, role: "user", content: text },
+    ]);
+    setDraft("");
+  };
+
+  return (
+    <div className="flex-1 flex flex-col min-h-0">
+      {/* Message list */}
+      <div ref={listRef} className="flex-1 overflow-y-auto p-3 space-y-3">
+        {messages.length === 0 ? (
+          <div className="flex flex-col items-center justify-center h-full gap-3 text-center py-10">
+            <div className="w-10 h-10 rounded-full bg-accent-soft flex items-center justify-center text-accent">
+              <Sparkles size={18} />
+            </div>
+            <p className="text-[13px] text-muted-foreground leading-snug max-w-[200px]">
+              Talk to the AI about &ldquo;{title}&rdquo; and the slides
+              connected to it.
+            </p>
+          </div>
+        ) : (
+          messages.map((msg) =>
+            msg.role === "user" ? (
+              <div key={msg.id} className="flex justify-end">
+                <div
+                  className="max-w-[85%] rounded-xl rounded-tr-sm px-3 py-2 text-[12px] leading-snug text-white whitespace-pre-wrap"
+                  style={{ background: "var(--accent-teal)" }}
+                >
+                  {msg.content}
+                </div>
+              </div>
+            ) : (
+              <div key={msg.id} className="flex">
+                <div className="max-w-[85%] bg-card border border-border rounded-xl rounded-tl-sm px-3 py-2.5 text-[12px] leading-snug text-muted-foreground whitespace-pre-wrap">
+                  {msg.content}
+                </div>
+              </div>
+            ),
+          )
+        )}
+      </div>
+
+      {/* Input */}
+      <div className="border-t border-border p-2.5 shrink-0">
+        <div className="border border-border rounded-lg px-3 py-2 bg-card flex items-center gap-2">
+          <input
+            className="flex-1 text-[13px] bg-transparent outline-none placeholder:text-muted-foreground"
+            placeholder="Ask about this scene…"
+            value={draft}
+            onChange={(e) => setDraft(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter" && !e.shiftKey) {
+                e.preventDefault();
+                submit();
+              }
+            }}
+          />
+          <button
+            type="button"
+            onClick={submit}
+            className="w-7 h-7 rounded-full flex items-center justify-center text-white hover:opacity-80 transition-opacity shrink-0"
+            style={{ background: "var(--accent-teal)" }}
+          >
+            <Send size={13} />
+          </button>
+        </div>
       </div>
     </div>
   );

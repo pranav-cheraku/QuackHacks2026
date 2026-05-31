@@ -5,6 +5,7 @@ import type { SlideNode, SceneKind, SceneStatus } from "@/lib/projektor-data";
 interface Props {
   node: SlideNode;
   selected: boolean;
+  dimmed?: boolean;
   onSelect: () => void;
   onOpenEditor: () => void;
   onMove: (x: number, y: number) => void;
@@ -24,14 +25,15 @@ const STATUS_LABEL: Record<SceneStatus, string> = {
 };
 
 const STATUS_DOT: Record<SceneStatus, string> = {
-  final: "var(--muted-foreground)",
-  draft: "var(--warn)",
-  "in-review": "var(--accent)",
+  final: "var(--ok)", // green
+  "in-review": "var(--warn)", // orange
+  draft: "var(--danger)", // red
 };
 
 export function SlideCard({
   node,
   selected,
+  dimmed = false,
   onSelect,
   onOpenEditor,
   onMove,
@@ -65,8 +67,8 @@ export function SlideCard({
 
   return (
     <div
-      className="absolute select-none"
-      style={{ left: node.x, top: node.y, width: w }}
+      className="absolute select-none transition-opacity"
+      style={{ left: node.x, top: node.y, width: w, opacity: dimmed ? 0.4 : 1 }}
       onMouseDown={onMouseDown}
       onDoubleClick={onOpenEditor}
     >

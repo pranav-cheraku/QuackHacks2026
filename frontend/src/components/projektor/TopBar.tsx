@@ -1,6 +1,17 @@
-import { Link } from "@tanstack/react-router";
+import { Link, useNavigate } from "@tanstack/react-router";
 import { Logo } from "./Logo";
-import { Play, Check, Share2, LayoutGrid } from "lucide-react";
+import { Play, Check, Share2, LayoutGrid, LogOut } from "lucide-react";
+import { signOut } from "firebase/auth";
+import { auth } from "@/lib/firebase";
+import { useAuth } from "@/context/AuthContext";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuLabel,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 
 interface Props {
   mode: "board" | "editor";
@@ -13,11 +24,29 @@ const TABS: { value: "board" | "editor"; label: string }[] = [
   { value: "editor", label: "Slides View" },
 ];
 
+function getInitials(user: { displayName: string | null; email: string | null }): string {
+  if (user.displayName) {
+    const parts = user.displayName.trim().split(/\s+/);
+    return parts.length >= 2
+      ? (parts[0][0] + parts[parts.length - 1][0]).toUpperCase()
+      : parts[0][0].toUpperCase();
+  }
+  return user.email ? user.email[0].toUpperCase() : "?";
+}
+
 export function TopBar({
   mode,
   setMode,
   presentationName = "Meridian — Series A",
 }: Props) {
+  const { currentUser } = useAuth();
+  const navigate = useNavigate();
+
+  async function handleSignOut() {
+    await signOut(auth);
+    navigate({ to: "/signin" });
+  }
+
   return (
     <header className="relative h-14 flex items-center px-3 gap-3 border-b border-border bg-chrome select-none shrink-0">
       {/* Left: logo · dashboard · current presentation */}
@@ -86,6 +115,52 @@ export function TopBar({
         >
           <Play size={12} fill="white" /> Present
         </button>
+
+        {currentUser && (
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <button className="ml-1 rounded-full w-8 h-8 overflow-hidden shrink-0 ring-2 ring-transparent hover:ring-accent/40 transition-shadow focus:outline-none">
+                {currentUser.photoURL ? (
+                  <img
+                    src={currentUser.photoURL}
+                    alt="Profile"
+                    className="w-full h-full object-cover"
+                    referrerPolicy="no-referrer"
+                  />
+                ) : (
+                  <span
+                    className="w-full h-full flex items-center justify-center text-[12px] font-semibold"
+                    style={{ background: "var(--accent-soft)", color: "var(--accent)" }}
+                  >
+                    {getInitials(currentUser)}
+                  </span>
+                )}
+              </button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end" className="w-52">
+              <DropdownMenuLabel className="font-normal">
+                <div className="flex flex-col gap-0.5">
+                  {currentUser.displayName && (
+                    <span className="font-semibold text-ink text-[13px] truncate">
+                      {currentUser.displayName}
+                    </span>
+                  )}
+                  <span className="text-[12px] text-muted-foreground truncate">
+                    {currentUser.email}
+                  </span>
+                </div>
+              </DropdownMenuLabel>
+              <DropdownMenuSeparator />
+              <DropdownMenuItem
+                onClick={handleSignOut}
+                className="text-danger focus:text-danger focus:bg-danger/10 cursor-pointer"
+              >
+                <LogOut size={14} />
+                Sign out
+              </DropdownMenuItem>
+            </DropdownMenuContent>
+          </DropdownMenu>
+        )}
       </div>
     </header>
   );

@@ -1,3 +1,6 @@
+import type { LayoutNode } from "./ir";
+import { emptyRoot } from "./ir";
+
 export type ComponentType =
   | "Header"
   | "Subheader"
@@ -32,7 +35,7 @@ export type SlideState = "rendered" | "ingredient";
 export interface SlideCandidate {
   id: string;
   label: string;
-  elements: import("./slide-model").SlideElement[];
+  root: LayoutNode;
 }
 
 export interface SlideNode {
@@ -47,7 +50,7 @@ export interface SlideNode {
   thumb: "title" | "stats" | "chart" | "list" | "closing";
   width?: number;
   height?: number;
-  elements: import("./slide-model").SlideElement[];
+  root: LayoutNode;
   candidates: SlideCandidate[];
   activeDesignId: string | null;
 }
@@ -87,7 +90,7 @@ export const INITIAL_NODES: SlideNode[] = [
     thumb: "title",
     width: 280,
     height: 170,
-    elements: [],
+    root: emptyRoot("n1"),
     candidates: [],
     activeDesignId: null,
   },
@@ -103,7 +106,7 @@ export const INITIAL_NODES: SlideNode[] = [
     thumb: "stats",
     width: 280,
     height: 170,
-    elements: [],
+    root: emptyRoot("n2"),
     candidates: [],
     activeDesignId: null,
   },
@@ -119,7 +122,7 @@ export const INITIAL_NODES: SlideNode[] = [
     thumb: "title",
     width: 260,
     height: 220,
-    elements: [],
+    root: emptyRoot("n3"),
     candidates: [],
     activeDesignId: null,
   },
@@ -135,7 +138,7 @@ export const INITIAL_NODES: SlideNode[] = [
     thumb: "chart",
     width: 280,
     height: 170,
-    elements: [],
+    root: emptyRoot("n4"),
     candidates: [],
     activeDesignId: null,
   },
@@ -151,7 +154,7 @@ export const INITIAL_NODES: SlideNode[] = [
     thumb: "list",
     width: 280,
     height: 170,
-    elements: [],
+    root: emptyRoot("n5"),
     candidates: [],
     activeDesignId: null,
   },
@@ -167,7 +170,7 @@ export const INITIAL_NODES: SlideNode[] = [
     thumb: "closing",
     width: 280,
     height: 170,
-    elements: [],
+    root: emptyRoot("n6"),
     candidates: [],
     activeDesignId: null,
   },

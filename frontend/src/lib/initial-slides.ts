@@ -6,6 +6,8 @@
 // The static JSX templates in EditorView / SlideThumb are no longer used.
 
 import type { SlideElement } from "./slide-model";
+import type { LayoutNode, LeafNode, ContentBlock, TextBlockStyle, ShapeBlockStyle } from "./ir";
+import { makeLeafId } from "./ir";
 
 const TEAL = "oklch(0.54 0.105 192)";
 const TEAL_LIGHT = "oklch(0.85 0.02 192)";
@@ -42,7 +44,7 @@ export const slide1Elements: SlideElement[] = [
     id: id(), type: "text", zIndex: 1, opacity: 1, rotation: 0,
     placement: { col: 500, row: 1100, colSpan: 8700, rowSpan: 2000 },
     text: {
-      content: "Strategy\nReview",
+      content: "Strategy\nReview blah balh",
       fontSize: 72, fontWeight: 800, fontStyle: "normal",
       textDecoration: "none", textAlign: "left",
       color: INK, lineHeight: 0.95,
@@ -92,7 +94,7 @@ export const slide1Elements: SlideElement[] = [
     id: id(), type: "text", zIndex: 1, opacity: 1, rotation: 0,
     placement: { col: 1100, row: 4950, colSpan: 3000, rowSpan: 350 },
     text: {
-      content: "Head of Strategy",
+      content: "Head of Strategy YESSIREIEIIRE",
       fontSize: 11, fontWeight: 400, fontStyle: "normal",
       textDecoration: "none", textAlign: "left",
       color: MUTED, fontFamily: "mono",
@@ -328,4 +330,62 @@ export const SLIDE_ELEMENTS: Record<string, SlideElement[]> = {
   n4: slide4Elements,
   n5: slide5Elements,
   n6: slide6Elements,
+};
+
+// ── IR conversion ─────────────────────────────────────────────────────────────
+
+export function elementToLeaf(el: SlideElement): LeafNode {
+  let block: ContentBlock;
+  if (el.type === "text" && el.text) {
+    const style: TextBlockStyle = {
+      fontSize:       el.text.fontSize,
+      fontWeight:     el.text.fontWeight,
+      fontStyle:      el.text.fontStyle,
+      textDecoration: el.text.textDecoration,
+      textAlign:      el.text.textAlign,
+      color:          el.text.color,
+      fontFamily:     el.text.fontFamily,
+      lineHeight:     el.text.lineHeight,
+      letterSpacing:  el.text.letterSpacing,
+    };
+    block = { role: "text", text: el.text.content, style };
+  } else if (el.type === "shape" && el.shape) {
+    const style: ShapeBlockStyle = {
+      fill:         el.shape.fill,
+      stroke:       el.shape.stroke,
+      strokeWidth:  el.shape.strokeWidth,
+      borderRadius: el.shape.borderRadius,
+    };
+    block = { role: "shape", style };
+  } else {
+    block = { role: "image", src: el.src ?? "", style: { objectFit: "cover" } };
+  }
+  return {
+    kind:      "leaf",
+    id:        el.id,
+    placement: el.placement,
+    block,
+    zIndex:    el.zIndex,
+    opacity:   el.opacity,
+    rotation:  el.rotation,
+  };
+}
+
+export function makeRootStack(slideId: string, elements: SlideElement[]): LayoutNode {
+  return {
+    kind:     "stack",
+    id:       `root-${slideId}`,
+    dir:      "col",
+    gap:      0,
+    children: elements.map(elementToLeaf),
+  };
+}
+
+export const INITIAL_IR_SLIDES: Record<string, LayoutNode> = {
+  n1: makeRootStack("n1", slide1Elements),
+  n2: makeRootStack("n2", slide2Elements),
+  n3: makeRootStack("n3", slide3Elements),
+  n4: makeRootStack("n4", slide4Elements),
+  n5: makeRootStack("n5", slide5Elements),
+  n6: makeRootStack("n6", slide6Elements),
 };

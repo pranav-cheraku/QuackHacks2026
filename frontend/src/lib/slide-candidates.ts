@@ -1,5 +1,6 @@
 import type { SlideCandidate } from "./projektor-data";
 import type { SlideElement } from "./slide-model";
+import { makeRootStack } from "./initial-slides";
 import {
   slide1Elements, slide2Elements, slide3Elements,
   slide4Elements, slide5Elements, slide6Elements,
@@ -153,26 +154,26 @@ const n6_impact: SlideElement[] = [
 
 export const SLIDE_CANDIDATES: Record<string, SlideCandidate[]> = {
   n1: [
-    { id: "n1-c1", label: "Original",  elements: slide1Elements },
-    { id: "n1-c2", label: "Centered",  elements: n1_centered },
-    { id: "n1-c3", label: "Split",     elements: n1_split },
+    { id: "n1-c1", label: "Original",  root: makeRootStack("n1-c1", slide1Elements) },
+    { id: "n1-c2", label: "Centered",  root: makeRootStack("n1-c2", n1_centered) },
+    { id: "n1-c3", label: "Split",     root: makeRootStack("n1-c3", n1_split) },
   ],
   n2: [
-    { id: "n2-c1", label: "Original",  elements: slide2Elements },
-    { id: "n2-c2", label: "Stacked",   elements: n2_stacked },
+    { id: "n2-c1", label: "Original",  root: makeRootStack("n2-c1", slide2Elements) },
+    { id: "n2-c2", label: "Stacked",   root: makeRootStack("n2-c2", n2_stacked) },
   ],
   n3: [
-    { id: "n3-c1", label: "Original",  elements: slide3Elements },
+    { id: "n3-c1", label: "Original",  root: makeRootStack("n3-c1", slide3Elements) },
   ],
   n4: [
-    { id: "n4-c1", label: "Original",  elements: slide4Elements },
+    { id: "n4-c1", label: "Original",  root: makeRootStack("n4-c1", slide4Elements) },
   ],
   n5: [
-    { id: "n5-c1", label: "Original",  elements: slide5Elements },
-    { id: "n5-c2", label: "Cards",     elements: n5_cards },
+    { id: "n5-c1", label: "Original",  root: makeRootStack("n5-c1", slide5Elements) },
+    { id: "n5-c2", label: "Cards",     root: makeRootStack("n5-c2", n5_cards) },
   ],
   n6: [
-    { id: "n6-c1", label: "Original",  elements: slide6Elements },
-    { id: "n6-c2", label: "Dark Impact", elements: n6_impact },
+    { id: "n6-c1", label: "Original",  root: makeRootStack("n6-c1", slide6Elements) },
+    { id: "n6-c2", label: "Dark Impact", root: makeRootStack("n6-c2", n6_impact) },
   ],
 };

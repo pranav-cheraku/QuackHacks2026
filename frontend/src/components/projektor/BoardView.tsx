@@ -12,6 +12,8 @@ import { GhostCard } from "./GhostCard";
 import { GenerateNode } from "./GenerateNode";
 import { ContentGraphView } from "./ContentGraphView";
 import { SlideCard } from "./SlideCard";
+import { ContentNodeCard } from "./ContentNodeCard";
+import type { ContentNode } from "@/lib/ir";
 import {
   INITIAL_NODES,
   INITIAL_EDGES,
@@ -43,6 +45,8 @@ interface Props {
   // Called whenever BoardView's nodes/edges change structurally (new nodes, text edits).
   // Keeps index.tsx's deck in sync so EditorView can see freshest content at double-click.
   onNodesChange?: (nodes: SlideNode[], edges: Edge[]) => void;
+  contentPool?: ContentNode[];
+  onContentPoolChange?: (pool: ContentNode[]) => void;
 }
 
 // Placeholder chosen spine — real pick logic lands with the branch model.
@@ -189,6 +193,8 @@ export function BoardView({
   initialEdges,
   externalSlides,
   onNodesChange,
+  contentPool,
+  onContentPoolChange,
 }: Props) {
   const [nodes, setNodes] = useState<SlideNode[]>(
     initialNodes ?? INITIAL_NODES,
@@ -196,6 +202,7 @@ export function BoardView({
   const [edges, setEdges] = useState<Edge[]>(initialEdges ?? INITIAL_EDGES);
   const [selected, setSelected] = useState<string | null>("n1");
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set(["n1"]));
+  const [selectedContentId, setSelectedContentId] = useState<string | null>(null);
   const [canvasMode, setCanvasMode] = useState<"navigate" | "select">(
     "navigate",
   );
@@ -616,6 +623,7 @@ export function BoardView({
       setSelected(null);
       setSelectedIds(new Set());
       setSelectedEdge(null);
+      setSelectedContentId(null);
       panRef.current = { x: e.clientX - pan.x, y: e.clientY - pan.y };
       const move = (ev: MouseEvent) => {
         if (!panRef.current) return;
@@ -1162,6 +1170,28 @@ export function BoardView({
               </div>
             );
           })}
+
+          {/* Content pool nodes — floating text/image cards below their source slides */}
+          {contentPool?.map((cn) => (
+            <ContentNodeCard
+              key={cn.id}
+              node={cn}
+              selected={selectedContentId === cn.id}
+              zoom={zoom}
+              onSelect={() => {
+                setSelected(null);
+                setSelectedIds(new Set());
+                setSelectedContentId(cn.id);
+              }}
+              onMove={(x, y) => {
+                onContentPoolChange?.(
+                  contentPool.map((c) =>
+                    c.id === cn.id ? { ...c, graphPosition: { x, y } } : c,
+                  ),
+                );
+              }}
+            />
+          ))}
 
           {/* Generate-next nodes — one per leaf, just below the card */}
           {leafNodes.map((n) => {

@@ -121,7 +121,7 @@ export function ScenePanel({
       <div className="px-4 pt-3.5 pb-3 border-b border-border shrink-0">
         <div className="flex items-center gap-2">
           <span className="font-mono text-[10px] uppercase tracking-wider text-muted-foreground">
-            {node ? `Scene ${String(node.index).padStart(2, "0")}` : "Graph View"}
+            {selectedCount > 1 ? `${selectedCount} scenes` : node ? `Scene ${String(node.index).padStart(2, "0")}` : "Graph View"}
           </span>
           <button
             type="button"
@@ -133,7 +133,7 @@ export function ScenePanel({
           </button>
         </div>
         <div className="mt-1 font-serif text-[20px] leading-[1.15] text-ink truncate">
-          {node ? node.title : "Your presentation"}
+          {selectedCount > 1 ? "Multiple scenes selected" : node ? node.title : "Your presentation"}
         </div>
 
         {/* Tabs */}
@@ -441,6 +441,15 @@ interface ChatMessage {
   content: string;
 }
 
+const AUTO_RESPONSES = [
+  "Based on the current slide structure, I'd suggest reinforcing the key claim with additional supporting evidence on the slide that follows.",
+  "This slide looks strong. Consider tightening the headline to focus on the single most important insight for the audience.",
+  "The argument flow could be improved by moving the data slide before this one to establish context first.",
+  "Nice structure overall. You might want to add a transition statement that bridges this slide's conclusion to the next claim.",
+  "The visual hierarchy could be improved here — try leading with the key stat rather than the body copy to hook the audience faster.",
+];
+let autoIdx = 0;
+
 const QUICK_PROMPTS = [
   "Assess the slide deck flow",
   "Improve this slide",
@@ -458,6 +467,8 @@ function ChatTab({ title, selectedCount }: { title: string; selectedCount: numbe
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [draft, setDraft] = useState("");
   const [attachment, setAttachment] = useState<AttachedImage | null>(null);
+  const [isTyping, setIsTyping] = useState(false);
+  const [sending, setSending] = useState(false);
   const listRef = useRef<HTMLDivElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
@@ -491,9 +502,24 @@ function ChatTab({ title, selectedCount }: { title: string; selectedCount: numbe
       URL.revokeObjectURL(attachment.objectUrl);
       setAttachment(null);
     }
+    setIsTyping(true);
+    const response = AUTO_RESPONSES[autoIdx % AUTO_RESPONSES.length];
+    autoIdx += 1;
+    setTimeout(() => {
+      setIsTyping(false);
+      setMessages((prev) => [
+        ...prev,
+        { id: `msg-${Date.now()}`, role: "agent", content: response },
+      ]);
+    }, 1400);
   };
 
-  const submit = () => submitText(draft);
+  const submit = () => {
+    if (!draft.trim() && !attachment) return;
+    setSending(true);
+    setTimeout(() => setSending(false), 350);
+    submitText(draft);
+  };
 
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
@@ -509,6 +535,22 @@ function ChatTab({ title, selectedCount }: { title: string; selectedCount: numbe
 
   return (
     <div className="flex-1 flex flex-col min-h-0">
+      <style>{`
+        @keyframes slideUp {
+          from { opacity: 0; transform: translateY(8px); }
+          to   { opacity: 1; transform: translateY(0); }
+        }
+        @keyframes dotBounce {
+          0%, 60%, 100% { transform: translateY(0); }
+          30%            { transform: translateY(-5px); }
+        }
+        @keyframes sendPop {
+          0%   { transform: scale(1); }
+          40%  { transform: scale(0.82); }
+          70%  { transform: scale(1.12); }
+          100% { transform: scale(1); }
+        }
+      `}</style>
       {/* Message list */}
       <div ref={listRef} className="flex-1 overflow-y-auto p-3 space-y-3">
         {messages.length === 0 ? (
@@ -535,24 +577,39 @@ function ChatTab({ title, selectedCount }: { title: string; selectedCount: numbe
             </div>
           </div>
         ) : (
-          messages.map((msg) =>
-            msg.role === "user" ? (
-              <div key={msg.id} className="flex justify-end">
-                <div
-                  className="max-w-[85%] rounded-xl rounded-tr-sm px-3 py-2 text-[12px] leading-snug text-white whitespace-pre-wrap"
-                  style={{ background: "var(--accent-teal)" }}
-                >
-                  {msg.content}
+          <>
+            {messages.map((msg) =>
+              msg.role === "user" ? (
+                <div key={msg.id} className="flex justify-end" style={{ animation: "slideUp 0.25s ease-out" }}>
+                  <div
+                    className="max-w-[85%] rounded-xl rounded-tr-sm px-3 py-2 text-[12px] leading-snug text-white whitespace-pre-wrap"
+                    style={{ background: "var(--accent-teal)" }}
+                  >
+                    {msg.content}
+                  </div>
+                </div>
+              ) : (
+                <div key={msg.id} className="flex" style={{ animation: "slideUp 0.25s ease-out" }}>
+                  <div className="max-w-[85%] bg-card border border-border rounded-xl rounded-tl-sm px-3 py-2.5 text-[12px] leading-snug text-muted-foreground whitespace-pre-wrap">
+                    {msg.content}
+                  </div>
+                </div>
+              ),
+            )}
+            {isTyping && (
+              <div className="flex" style={{ animation: "slideUp 0.2s ease-out" }}>
+                <div className="bg-card border border-border rounded-xl rounded-tl-sm px-3 py-3 flex items-center gap-1">
+                  {[0, 1, 2].map((i) => (
+                    <span
+                      key={i}
+                      className="w-1.5 h-1.5 rounded-full bg-muted-foreground/50"
+                      style={{ animation: "dotBounce 1.1s ease-in-out infinite", animationDelay: `${i * 0.18}s` }}
+                    />
+                  ))}
                 </div>
               </div>
-            ) : (
-              <div key={msg.id} className="flex">
-                <div className="max-w-[85%] bg-card border border-border rounded-xl rounded-tl-sm px-3 py-2.5 text-[12px] leading-snug text-muted-foreground whitespace-pre-wrap">
-                  {msg.content}
-                </div>
-              </div>
-            ),
-          )
+            )}
+          </>
         )}
       </div>
 
@@ -639,8 +696,11 @@ function ChatTab({ title, selectedCount }: { title: string; selectedCount: numbe
           <button
             type="button"
             onClick={submit}
-            className="w-7 h-7 rounded-full flex items-center justify-center text-white hover:opacity-80 transition-opacity shrink-0"
-            style={{ background: "var(--accent-teal)" }}
+            className="w-7 h-7 rounded-full flex items-center justify-center text-white hover:opacity-80 active:scale-90 transition-all shrink-0"
+            style={{
+              background: "var(--accent-teal)",
+              animation: sending ? "sendPop 0.35s ease-out" : undefined,
+            }}
           >
             <Send size={13} />
           </button>

@@ -119,11 +119,11 @@ export function EditorView({ startNodeId }: Props) {
     [activeId, updateSlide]
   );
 
-  const addEl = (el: SlideElement) => {
+  const addEl = useCallback((el: SlideElement) => {
     updateSlide(activeId, (s) => ({ ...s, elements: [...s.elements, el] }));
     setSelectedElId(el.id);
     setEditingElId(null);
-  };
+  }, [activeId, updateSlide]);
 
   const deleteEl = useCallback(
     (id: string) => {
@@ -197,6 +197,34 @@ export function EditorView({ startNodeId }: Props) {
     window.addEventListener("keydown", handler);
     return () => window.removeEventListener("keydown", handler);
   }, [selectedElId, editingElId, deleteEl, duplicateEl, undo, redo]);
+
+  // ── Paste image from clipboard ────────────────────────────────────────────
+  useEffect(() => {
+    const handlePaste = (e: ClipboardEvent) => {
+      // Let native text paste through when a text field has focus
+      const tag = (document.activeElement as HTMLElement | null)?.tagName;
+      if (tag === "TEXTAREA" || tag === "INPUT") return;
+      const items = e.clipboardData?.items;
+      if (!items) return;
+      let file: File | null = null;
+      for (let i = 0; i < items.length; i++) {
+        if (items[i].kind === "file" && items[i].type.startsWith("image/")) {
+          file = items[i].getAsFile();
+          break;
+        }
+      }
+      if (!file) return;
+      e.preventDefault();
+      const src = URL.createObjectURL(file);
+      if (selectedEl?.type === "image") {
+        updateEl(selectedEl.id, (el) => ({ ...el, src }));
+      } else {
+        addEl(makeImageElement({ src, placement: { col: 3000, row: 1688, colSpan: 4000, rowSpan: 2250 } }));
+      }
+    };
+    window.addEventListener("paste", handlePaste);
+    return () => window.removeEventListener("paste", handlePaste);
+  }, [selectedEl, updateEl, addEl]);
 
   const commitMove   = (id: string, p: GridPlacement) => updateEl(id, (e) => ({ ...e, placement: p }));
   const commitResize = (id: string, p: GridPlacement) => updateEl(id, (e) => ({ ...e, placement: p }));
@@ -372,6 +400,26 @@ export function EditorView({ startNodeId }: Props) {
             className="bg-white rounded-sm shadow-[0_8px_40px_-12px_oklch(0.3_0.01_175/0.3)] relative overflow-hidden shrink-0"
             style={{ width: 928, height: 522 }}
             onClick={(e) => e.stopPropagation()}
+            onDragOver={(e) => { e.preventDefault(); e.stopPropagation(); }}
+            onDrop={(e) => {
+              e.preventDefault();
+              e.stopPropagation();
+              const file = Array.from(e.dataTransfer.files).find((f) => f.type.startsWith("image/")) ?? null;
+              if (!file) return;
+              const src = URL.createObjectURL(file);
+              if (selectedEl?.type === "image") {
+                updateEl(selectedEl.id, (el) => ({ ...el, src }));
+              } else {
+                const colSpan = 4000;
+                const rowSpan = 2250;
+                const rect = slideRef.current!.getBoundingClientRect();
+                const col = snap(Math.max(0, Math.min(GRID_COLS - colSpan,
+                  Math.round(((e.clientX - rect.left) / rect.width) * GRID_COLS - colSpan / 2))));
+                const row = snap(Math.max(0, Math.min(GRID_ROWS - rowSpan,
+                  Math.round(((e.clientY - rect.top) / rect.height) * GRID_ROWS - rowSpan / 2))));
+                addEl(makeImageElement({ src, placement: { col, row, colSpan, rowSpan } }));
+              }
+            }}
           >
             <GridOverlay visible={showGrid} />
 

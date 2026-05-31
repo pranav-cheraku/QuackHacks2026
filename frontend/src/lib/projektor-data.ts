@@ -103,6 +103,8 @@ export interface SlideNode {
   rationale?: string;
   // "bucket" = raw content from chunker; "designed" (or undefined) = has a layout.
   designStatus?: DesignStatus;
+  /** IDs of ContentNodes in the global pool currently assigned to this slide. */
+  assignedContentIds?: string[];
 }
 
 export interface Edge {

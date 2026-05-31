@@ -93,29 +93,22 @@ export const DataPayloadSchema = z.object({
 });
 export type DataPayload = z.infer<typeof DataPayloadSchema>;
 
+// Fields shared by every ContentNode variant.
+// sourceRef  — immutable origin: the scene that spawned this node (set by chunker).
+// assignedSceneId — mutable assignment: the scene currently displaying this content
+//                   (set by the user via drag-to-connect in the graph view).
+// graphPosition   — canvas coordinates for the floating card.
+const contentNodeBase = {
+  sourceRef:       z.string().optional(),
+  assignedSceneId: z.string().optional(),
+  graphPosition:   z.object({ x: z.number(), y: z.number() }).optional(),
+} as const;
+
 // Discriminated on `kind` so payload type narrows automatically.
 export const ContentNodeSchema = z.discriminatedUnion('kind', [
-  z.object({
-    id: z.string(),
-    kind: z.literal('text'),
-    payload: TextPayloadSchema,
-    sourceRef: z.string().optional(),
-    graphPosition: z.object({ x: z.number(), y: z.number() }).optional(),
-  }),
-  z.object({
-    id: z.string(),
-    kind: z.literal('image'),
-    payload: ImagePayloadSchema,
-    sourceRef: z.string().optional(),
-    graphPosition: z.object({ x: z.number(), y: z.number() }).optional(),
-  }),
-  z.object({
-    id: z.string(),
-    kind: z.literal('data'),
-    payload: DataPayloadSchema,
-    sourceRef: z.string().optional(),
-    graphPosition: z.object({ x: z.number(), y: z.number() }).optional(),
-  }),
+  z.object({ id: z.string(), kind: z.literal('text'),  payload: TextPayloadSchema,  ...contentNodeBase }),
+  z.object({ id: z.string(), kind: z.literal('image'), payload: ImagePayloadSchema, ...contentNodeBase }),
+  z.object({ id: z.string(), kind: z.literal('data'),  payload: DataPayloadSchema,  ...contentNodeBase }),
 ]);
 export type ContentNode = z.infer<typeof ContentNodeSchema>;
 
@@ -224,6 +217,8 @@ export type LayoutNode =
       zIndex?: number;
       opacity?: number;
       rotation?: number;
+      /** Back-reference to the ContentNode in the pool that this leaf was materialized from. */
+      contentNodeId?: string;
     };
 
 export type LeafNode  = Extract<LayoutNode, { kind: 'leaf' }>;
@@ -250,6 +245,7 @@ export const LayoutNodeSchema: z.ZodType<LayoutNode> = z.lazy(() =>
       zIndex: z.number().optional(),
       opacity: z.number().optional(),
       rotation: z.number().optional(),
+      contentNodeId: z.string().optional(),
     }),
   ])
 );
@@ -285,6 +281,9 @@ export const SceneSchema = z.object({
   root: LayoutNodeSchema.optional(),
   cachedAt: z.string().optional(),
   spokenTrack: z.string().optional(),
+  /** IDs of ContentNodes currently assigned to this scene. Derived from AssignmentEdge
+   *  but also stored here for O(1) lookup without scanning the full assignments array. */
+  assignedContentIds: z.array(z.string()).optional(),
 });
 export type Scene = z.infer<typeof SceneSchema>;
 

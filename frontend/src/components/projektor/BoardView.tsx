@@ -806,9 +806,18 @@ export function BoardView({
       const t = e.target as HTMLElement | null;
       if (t && (t.tagName === "INPUT" || t.tagName === "TEXTAREA" || t.isContentEditable)) return;
       e.preventDefault();
+      const unassigned = (contentPool ?? []).find((c) => c.id === selectedAssignment);
+      const oldSceneId = unassigned?.assignedSceneId ?? unassigned?.sourceRef;
       onContentPoolChange?.((contentPool ?? []).map((c) =>
-        c.id === selectedAssignment ? { ...c, sourceRef: undefined } : c,
+        c.id === selectedAssignment ? { ...c, assignedSceneId: undefined } : c,
       ));
+      if (oldSceneId) {
+        setNodes((ns) => ns.map((n) =>
+          n.id === oldSceneId
+            ? { ...n, assignedContentIds: (n.assignedContentIds ?? []).filter((id) => id !== selectedAssignment) }
+            : n,
+        ));
+      }
       setSelectedAssignment(null);
     };
     window.addEventListener("keydown", onKey);
@@ -903,7 +912,7 @@ export function BoardView({
   };
 
   // Drag a wire from a content node's top port to a slide node to assign it.
-  // Dropping on a slide sets/replaces contentNode.sourceRef. Only slide nodes
+  // Dropping on a slide sets/replaces contentNode.assignedSceneId. Only slide nodes
   // (those in `nodes`) are valid targets; content nodes are not.
   const beginContentWire = (contentId: string, e: React.MouseEvent) => {
     e.stopPropagation();
@@ -929,9 +938,22 @@ export function BoardView({
       window.removeEventListener("mouseup", up);
       const target = slideIdAt(ev.clientX, ev.clientY);
       if (target) {
-        onContentPoolChange?.(
-          (contentPool ?? []).map((c) => (c.id === contentId ? { ...c, sourceRef: target } : c)),
-        );
+        const pool = contentPool ?? [];
+        const cn = pool.find((c) => c.id === contentId);
+        const oldSceneId = cn?.assignedSceneId ?? cn?.sourceRef;
+        // Update contentPool: set assignedSceneId on the dragged node.
+        onContentPoolChange?.(pool.map((c) => (c.id === contentId ? { ...c, assignedSceneId: target } : c)));
+        // Keep SlideNode.assignedContentIds in sync on both the old and new target slides.
+        setNodes((ns) => ns.map((n) => {
+          if (n.id === oldSceneId && oldSceneId !== target) {
+            return { ...n, assignedContentIds: (n.assignedContentIds ?? []).filter((id) => id !== contentId) };
+          }
+          if (n.id === target) {
+            const existing = n.assignedContentIds ?? [];
+            return existing.includes(contentId) ? n : { ...n, assignedContentIds: [...existing, contentId] };
+          }
+          return n;
+        }));
       }
       setRewireContent(null);
     };
@@ -1086,8 +1108,9 @@ export function BoardView({
 
             {/* Assignment edges — content node top → assigned slide bottom */}
             {(contentPool ?? []).map((cn) => {
-              if (!cn.sourceRef) return null;
-              const target = nodes.find((n) => n.id === cn.sourceRef);
+              const assignedId = cn.assignedSceneId ?? cn.sourceRef;
+              if (!assignedId) return null;
+              const target = nodes.find((n) => n.id === assignedId);
               if (!target) return null;
               const a = contentTopAnchor(cn);
               const b = anchorOf(target, "bottom");
@@ -1196,9 +1219,10 @@ export function BoardView({
           {/* Delete-assignment × — midpoint of hovered/selected assignment edge */}
           {!rewireContent &&
             (contentPool ?? []).map((cn) => {
-              if (!cn.sourceRef) return null;
+              const assignedId = cn.assignedSceneId ?? cn.sourceRef;
+              if (!assignedId) return null;
               if (hoverAssignment !== cn.id && selectedAssignment !== cn.id) return null;
-              const target = nodes.find((n) => n.id === cn.sourceRef);
+              const target = nodes.find((n) => n.id === assignedId);
               if (!target) return null;
               const a = contentTopAnchor(cn);
               const b = anchorOf(target, "bottom");
@@ -1213,7 +1237,12 @@ export function BoardView({
                   onClick={(ev) => {
                     ev.stopPropagation();
                     onContentPoolChange?.((contentPool ?? []).map((c) =>
-                      c.id === cn.id ? { ...c, sourceRef: undefined } : c,
+                      c.id === cn.id ? { ...c, assignedSceneId: undefined } : c,
+                    ));
+                    setNodes((ns) => ns.map((n) =>
+                      n.id === assignedId
+                        ? { ...n, assignedContentIds: (n.assignedContentIds ?? []).filter((id) => id !== cn.id) }
+                        : n,
                     ));
                     setSelectedAssignment(null);
                     setHoverAssignment(null);

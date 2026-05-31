@@ -5,6 +5,7 @@ import { BoardView } from "@/components/projektor/BoardView";
 import { EditorView } from "@/components/projektor/EditorView";
 import { LandingPage } from "@/components/projektor/LandingPage";
 import { INITIAL_NODES, INITIAL_EDGES, type SlideNode, type Edge } from "@/lib/projektor-data";
+import type { ContentNode } from "@/lib/ir";
 import { createDeck, getDeck } from "@/lib/deckStore";
 import { loadDeck, saveDeck } from "@/lib/firestore-slides";
 import type { HydrateResult } from "@/lib/chunker";
@@ -48,6 +49,7 @@ function Projektor() {
   // True once deck is hydrated from Firestore (or session store). EditorView uses
   // this signal to re-init its history from the loaded deck (fires at most once).
   const [deckLoaded, setDeckLoaded] = useState(!!savedDeck);
+  const [contentPool, setContentPool] = useState<ContentNode[]>([]);
   const saveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   useEffect(() => {
@@ -69,6 +71,7 @@ function Projektor() {
         if (saved && saved.nodes.length > 0) {
           setDeck(saved.nodes);
           setDeckEdges(saved.edges);
+          setContentPool(saved.contentPool);
           // phase stays "landing" — user must generate to enter the board.
         }
       })
@@ -86,13 +89,13 @@ function Projektor() {
     if (!currentUser || !deckLoaded || phase !== "app") return;
     if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
     saveTimerRef.current = setTimeout(() => {
-      saveDeck(currentUser.uid, deck, deckEdges).catch((err) =>
+      saveDeck(currentUser.uid, deck, deckEdges, contentPool).catch((err) =>
         console.error("[index] Failed to save deck:", err),
       );
     }, 1500);
     return () => { if (saveTimerRef.current) clearTimeout(saveTimerRef.current); };
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [deck, deckEdges, currentUser, deckLoaded, phase]);
+  }, [deck, deckEdges, contentPool, currentUser, deckLoaded, phase]);
 
   // Callback for EditorView: receives slide-layout updates and merges them into
   // the shared deck. Also picked up by BoardView via externalSlides so graph
@@ -124,10 +127,11 @@ function Projektor() {
   // GRAPH VIEW ENTRY POINT: generate output lands on the graph (board mode).
   // Buckets populate the graph as structural argument nodes; each call creates
   // a new deck entry in the session store (multi-deck support).
-  const handleGenerate = ({ nodes, edges }: HydrateResult) => {
+  const handleGenerate = ({ nodes, edges, contentPool: pool }: HydrateResult) => {
     createDeck(nodes, edges);
     setDeck(nodes);
     setDeckEdges(edges);
+    setContentPool(pool);
     setDeckLoaded(true); // signal EditorView to re-init from the freshly generated deck
     setEditorStart(null);
     setMode("board");
@@ -153,6 +157,8 @@ function Projektor() {
           initialEdges={deckEdges}
           externalSlides={deck}
           onNodesChange={handleDeckChange}
+          contentPool={contentPool}
+          onContentPoolChange={setContentPool}
           zoom={zoom}
           setZoom={setZoom}
           onOpenEditor={(id) => {

@@ -6,6 +6,7 @@ import { db } from './firebase';
 import { LayoutNodeSchema } from './ir';
 import type { LayoutNode } from './ir';
 import type { SlideNode, Edge } from './projektor-data';
+import type { ContentNode } from './ir';
 import { SLIDE_CANDIDATES } from './slide-candidates';
 
 const COL = 'slides';
@@ -90,15 +91,24 @@ export async function deleteSlideDoc(slideId: string): Promise<void> {
 // document — it is the single source of truth for the deck.
 
 // Save the full deck for the authenticated user.
-export async function saveDeck(uid: string, nodes: SlideNode[], edges: Edge[]): Promise<void> {
+export async function saveDeck(
+  uid: string,
+  nodes: SlideNode[],
+  edges: Edge[],
+  contentPool: ContentNode[] = [],
+): Promise<void> {
   await setDoc(
     doc(db, 'users', uid, 'decks', 'current'),
-    serialize({ nodes, edges, updatedAt: Date.now() }),
+    serialize({ nodes, edges, contentPool, updatedAt: Date.now() }),
   );
 }
 
 // Load the user's saved deck. Returns null on first run (no document yet).
-export async function loadDeck(uid: string): Promise<{ nodes: SlideNode[]; edges: Edge[] } | null> {
+export async function loadDeck(uid: string): Promise<{
+  nodes: SlideNode[];
+  edges: Edge[];
+  contentPool: ContentNode[];
+} | null> {
   const snap = await getDoc(doc(db, 'users', uid, 'decks', 'current'));
   if (!snap.exists()) return null;
   const data = snap.data();
@@ -106,5 +116,6 @@ export async function loadDeck(uid: string): Promise<{ nodes: SlideNode[]; edges
   return {
     nodes: data.nodes as SlideNode[],
     edges: Array.isArray(data.edges) ? (data.edges as Edge[]) : [],
+    contentPool: Array.isArray(data.contentPool) ? (data.contentPool as ContentNode[]) : [],
   };
 }

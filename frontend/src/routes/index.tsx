@@ -21,12 +21,15 @@ export const Route = createFileRoute("/")({
 function Projektor() {
   const [mode, setMode] = useState<"board" | "editor">("board");
   const [zoom, setZoom] = useState(1);
+  const [isGridVisible, setIsGridVisible] = useState(false);
   const [editorStart, setEditorStart] = useState<string | null>(null);
+
+  const toggleGrid = () => setIsGridVisible((v) => !v);
 
   return (
     <div className="h-screen flex flex-col bg-chrome text-ink overflow-hidden">
       <TopBar mode={mode} setMode={setMode} />
-      {mode === "board" ? (
+      {mode === "board" && (
         <BoardView
           zoom={zoom}
           setZoom={setZoom}
@@ -35,9 +38,20 @@ function Projektor() {
             setMode("editor");
           }}
         />
-      ) : (
-        <EditorView startNodeId={editorStart} />
       )}
+      {/* EditorView stays mounted so its undo history / edits survive Board↔Slides switches */}
+      <div
+        className="flex-1 min-h-0 flex flex-col"
+        style={{ display: mode === "editor" ? undefined : "none" }}
+      >
+        <EditorView
+          startNodeId={editorStart}
+          zoom={zoom}
+          setZoom={setZoom}
+          isGridVisible={isGridVisible}
+          toggleGrid={toggleGrid}
+        />
+      </div>
     </div>
   );
 }

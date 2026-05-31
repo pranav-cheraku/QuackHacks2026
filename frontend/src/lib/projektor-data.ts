@@ -36,6 +36,13 @@ export type SceneStatus = "final" | "draft" | "in-review";
 // (EditorView / SlideThumb). Kept until that view is reworked.
 export type SlideState = "rendered" | "ingredient";
 
+// Slides View (slide editor) — a design alternative for a scene.
+export interface SlideCandidate {
+  id: string;
+  label: string;
+  elements: import("./slide-model").SlideElement[];
+}
+
 export interface SlideNode {
   id: string;
   index: number;
@@ -51,6 +58,10 @@ export interface SlideNode {
   // legacy — Slides View only
   state: SlideState;
   thumb: "title" | "stats" | "chart" | "list" | "closing";
+  // Slides View (slide editor) — element model + design candidates.
+  elements: import("./slide-model").SlideElement[];
+  candidates: SlideCandidate[];
+  activeDesignId: string | null;
 }
 
 export type EdgeRelation = "supports" | "contrasts" | "builds-on" | "sequence";
@@ -77,6 +88,9 @@ export const INITIAL_NODES: SlideNode[] = [
     height: 190,
     state: "rendered",
     thumb: "title",
+    elements: [],
+    candidates: [],
+    activeDesignId: null,
   },
   {
     id: "n2",
@@ -90,6 +104,9 @@ export const INITIAL_NODES: SlideNode[] = [
     height: 180,
     state: "ingredient",
     thumb: "list",
+    elements: [],
+    candidates: [],
+    activeDesignId: null,
   },
   {
     id: "n3",
@@ -103,6 +120,9 @@ export const INITIAL_NODES: SlideNode[] = [
     height: 180,
     state: "rendered",
     thumb: "chart",
+    elements: [],
+    candidates: [],
+    activeDesignId: null,
   },
 ];
 

@@ -1,5 +1,5 @@
 import { createFileRoute, Link, useNavigate } from "@tanstack/react-router";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import {
   signInWithEmailAndPassword,
   signInWithPopup,
@@ -23,11 +23,13 @@ function SignIn() {
   const [error, setError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
 
-  // Redirect if already signed in
-  if (!loading && currentUser) {
-    navigate({ to: "/" });
-    return null;
-  }
+  useEffect(() => {
+    if (!loading && currentUser) {
+      navigate({ to: "/" });
+    }
+  }, [loading, currentUser, navigate]);
+
+  if (!loading && currentUser) return null;
 
   async function handleEmailSignIn() {
     if (!email || !password) return;

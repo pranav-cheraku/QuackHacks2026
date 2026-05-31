@@ -1,5 +1,5 @@
 import { createFileRoute, useNavigate } from "@tanstack/react-router";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { TopBar } from "@/components/projektor/TopBar";
 import { BoardView } from "@/components/projektor/BoardView";
 import { EditorView } from "@/components/projektor/EditorView";
@@ -22,16 +22,19 @@ export const Route = createFileRoute("/")({
 function Projektor() {
   const { currentUser, loading } = useAuth();
   const navigate = useNavigate();
+  // All hooks must be declared before any conditional returns
   const [mode, setMode] = useState<"board" | "editor">("board");
-
-  if (loading) return null;
-  if (!currentUser) {
-    navigate({ to: "/signin" });
-    return null;
-  }
   const [zoom, setZoom] = useState(1);
   const [isGridVisible, setIsGridVisible] = useState(false);
   const [editorStart, setEditorStart] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!loading && !currentUser) {
+      navigate({ to: "/signin" });
+    }
+  }, [loading, currentUser, navigate]);
+
+  if (loading || !currentUser) return null;
 
   const toggleGrid = () => setIsGridVisible((v) => !v);
 

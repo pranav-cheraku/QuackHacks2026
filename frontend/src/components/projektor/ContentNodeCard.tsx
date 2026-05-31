@@ -115,7 +115,7 @@ export function ContentNodeCard({
 
         {/* Text content */}
         {textPayload && (
-          <p className="px-3 pb-3 text-[12.5px] leading-snug text-ink line-clamp-3">
+          <p className="px-3 pb-3 text-[12.5px] leading-snug text-ink">
             {textPayload.text}
           </p>
         )}

@@ -809,7 +809,7 @@ export function BoardView({
       const unassigned = (contentPool ?? []).find((c) => c.id === selectedAssignment);
       const oldSceneId = unassigned?.assignedSceneId ?? unassigned?.sourceRef;
       onContentPoolChange?.((contentPool ?? []).map((c) =>
-        c.id === selectedAssignment ? { ...c, assignedSceneId: undefined } : c,
+        c.id === selectedAssignment ? { ...c, assignedSceneId: undefined, sourceRef: undefined } : c,
       ));
       if (oldSceneId) {
         setNodes((ns) => ns.map((n) =>
@@ -1237,7 +1237,7 @@ export function BoardView({
                   onClick={(ev) => {
                     ev.stopPropagation();
                     onContentPoolChange?.((contentPool ?? []).map((c) =>
-                      c.id === cn.id ? { ...c, assignedSceneId: undefined } : c,
+                      c.id === cn.id ? { ...c, assignedSceneId: undefined, sourceRef: undefined } : c,
                     ));
                     setNodes((ns) => ns.map((n) =>
                       n.id === assignedId
@@ -1261,6 +1261,12 @@ export function BoardView({
               setNodes((ns) =>
                 ns.map((m) => (m.id === n.id ? { ...m, x, y } : m)),
               );
+            const connectedContent = (contentPool ?? []).filter(
+              (cn) =>
+                n.assignedContentIds?.includes(cn.id) ||
+                cn.assignedSceneId === n.id ||
+                (!cn.assignedSceneId && cn.sourceRef === n.id),
+            );
             return (
               <div key={n.id} data-node data-node-id={n.id} className="group">
                 {n.ghost ? (
@@ -1289,6 +1295,7 @@ export function BoardView({
                     onMove={onMove}
                     onMeasure={(h) => reportHeight(n.id, h)}
                     zoom={zoom}
+                    connectedContent={connectedContent.length > 0 ? connectedContent : undefined}
                   />
                 )}
                 {/* Connect port — appears on hover; drag to draw a new arrow

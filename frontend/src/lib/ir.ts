@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import type { GridPlacement } from './grid';
+import { GRID_COLS, GRID_ROWS, type GridPlacement } from './grid';
 
 // ---------------------------------------------------------------------------
 // Primitives
@@ -488,6 +488,89 @@ export function collectLeaves(root: LayoutNode): LeafNode[] {
 
 export function emptyRoot(id: string): StackNode {
   return { kind: 'stack', id: `root-${id}`, dir: 'col', gap: 0, children: [] };
+}
+
+// ---------------------------------------------------------------------------
+// Content-node → slide materialization
+// Converts the assigned ContentNodes for a scene into a flat LayoutNode tree
+// that the slide renderer can display. This is the "IR as source of truth"
+// rendering path: the EditorView calls this whenever it enters a slide that
+// has content assigned, so the layout is always derived from the pool.
+// ---------------------------------------------------------------------------
+
+// Placement constants relative to the 10 000 × 5 625 grid (see grid.ts).
+const MAT_COL_START = Math.round(GRID_COLS * 0.06);   // ~600  — 6% left margin
+const MAT_COL_SPAN  = Math.round(GRID_COLS * 0.88);   // ~8800 — 88% width
+const MAT_ROW_START = Math.round(GRID_ROWS * 0.07);   // ~394  — 7% top margin
+const MAT_ROW_TOTAL = Math.round(GRID_ROWS * 0.85);   // ~4781 — usable height
+const MAT_ROW_GAP   = Math.round(GRID_ROWS * 0.025);  // ~140  — gap between items
+
+function contentNodeToLeaf(cn: ContentNode, placement: GridPlacement): LeafNode {
+  if (cn.kind === 'image') {
+    return {
+      kind: 'leaf',
+      id: makeLeafId(),
+      contentNodeId: cn.id,
+      placement,
+      block: { role: 'image', src: cn.payload.url },
+      zIndex: 1,
+      opacity: 1,
+      rotation: 0,
+    };
+  }
+  const payload = cn.payload as TextPayload;
+  const styleMap: Record<TextPayload['role'], Partial<TextBlockStyle>> = {
+    claim:    { fontSize: 72, fontWeight: 700, lineHeight: 1.1 },
+    evidence: { fontSize: 32, fontWeight: 400, lineHeight: 1.4 },
+    aside:    { fontSize: 28, fontWeight: 400, fontStyle: 'italic', lineHeight: 1.4 },
+  };
+  const style: TextBlockStyle = {
+    fontSize: 32,
+    fontWeight: 400,
+    fontStyle: 'normal',
+    textDecoration: 'none',
+    textAlign: 'left',
+    color: 'oklch(0.24 0.009 185)',
+    lineHeight: 1.3,
+    ...styleMap[payload.role],
+  };
+  return {
+    kind: 'leaf',
+    id: makeLeafId(),
+    contentNodeId: cn.id,
+    placement,
+    block: { role: 'text', text: payload.text, style },
+    zIndex: 1,
+    opacity: 1,
+    rotation: 0,
+  };
+}
+
+export function materializeContentNodes(
+  contentNodes: ContentNode[],
+  sceneId: string,
+): StackNode {
+  const n = contentNodes.length;
+  const totalGap = MAT_ROW_GAP * Math.max(0, n - 1);
+  const rowPerItem = n > 0 ? Math.floor((MAT_ROW_TOTAL - totalGap) / n) : MAT_ROW_TOTAL;
+
+  const leaves = contentNodes.map((cn, i): LeafNode => {
+    const row = MAT_ROW_START + i * (rowPerItem + MAT_ROW_GAP);
+    return contentNodeToLeaf(cn, {
+      col: MAT_COL_START,
+      row,
+      colSpan: MAT_COL_SPAN,
+      rowSpan: rowPerItem,
+    });
+  });
+
+  return {
+    kind: 'stack',
+    id: `root-${sceneId}`,
+    dir: 'col',
+    gap: 0,
+    children: leaves,
+  };
 }
 
 export function deepCloneWithNewIds(root: LayoutNode): LayoutNode {

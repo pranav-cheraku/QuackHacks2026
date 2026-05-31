@@ -50,6 +50,9 @@ function Projektor() {
   // this signal to re-init its history from the loaded deck (fires at most once).
   const [deckLoaded, setDeckLoaded] = useState(!!savedDeck);
   const [contentPool, setContentPool] = useState<ContentNode[]>([]);
+  // Incremented each time the user double-clicks into the editor — ensures
+  // EditorView re-materializes the slide root even if startNodeId hasn't changed.
+  const [editorKey, setEditorKey] = useState(0);
   const saveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   useEffect(() => {
@@ -163,6 +166,7 @@ function Projektor() {
           setZoom={setZoom}
           onOpenEditor={(id) => {
             setEditorStart(id);
+            setEditorKey((k) => k + 1);
             setMode("editor");
           }}
         />
@@ -181,6 +185,8 @@ function Projektor() {
           setZoom={setZoom}
           isGridVisible={isGridVisible}
           toggleGrid={toggleGrid}
+          contentPool={contentPool}
+          entryKey={editorKey}
         />
       </div>
     </div>

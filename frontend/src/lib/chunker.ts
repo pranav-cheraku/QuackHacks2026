@@ -7,9 +7,17 @@
 // to Gemini server-side — GEMINI_API_KEY never reaches the browser.
 // If the server function fails, mockChunkIntoScenes provides a graceful fallback.
 
-import type { SlideNode, SceneKind, SceneStatus, SlideState } from "./projektor-data";
+import type { SlideNode, Edge, EdgeRelation, SceneKind, SceneStatus, SlideState, DesignStatus } from "./projektor-data";
 import { nextId } from "./slide-model";
 import { chunkDeck } from "./chunkApi";
+
+// ── Public result type ────────────────────────────────────────────────────────
+// Both nodes AND edges come out of the chunker so the graph view can draw
+// the narrative skeleton immediately.
+export interface HydrateResult {
+  nodes: SlideNode[];
+  edges: Edge[];
+}
 
 export type TargetDuration = 5 | 10 | 20;
 
@@ -89,100 +97,22 @@ function mockChunkIntoScenes(text: string, targetCount: number): ChunkResult[] {
   return chunks;
 }
 
-// ── Hydration ─────────────────────────────────────────────────────────────────
-// Maps ChunkResult[] → valid SlideNode[] conforming to the IR model.
-// Coordinate-bound elements match the 10 000 × 5 625 grid; SNAP_STEP = 100.
-
-const TEAL = "oklch(0.54 0.105 192)";
-const INK = "oklch(0.24 0.009 185)";
-const MUTED = "oklch(0.53 0.011 185)";
-
-function buildSlideNodes(chunks: ChunkResult[]): SlideNode[] {
+// ── Bucket hydration ──────────────────────────────────────────────────────────
+// Maps ChunkResult[] → raw bucket nodes + sequence edges.
+// Buckets carry the structural content (headline, body, kind, eyebrow) but NO
+// slide design yet. elements[] stays empty — it is populated lazily when the
+// user double-clicks a bucket and the slide-design agent runs (see slideDesignAgent.ts).
+// Board position: 4-column grid, left-to-right then top-to-bottom.
+function buildSlideNodes(chunks: ChunkResult[]): HydrateResult {
   const COLS_PER_ROW = 4;
   const COL_W = 360;
   const ROW_H = 240;
 
-  return chunks.map((chunk, i) => {
-    const id = `gen-${Date.now()}-${i}`;
-    const hasEyebrow = Boolean(chunk.eyebrow);
-    const headlineRow = hasEyebrow ? 900 : 700;
-    const bodyRow = hasEyebrow ? 2600 : 2400;
-
-    const elements = [
-      // Eyebrow label (optional)
-      ...(hasEyebrow
-        ? [
-            {
-              id: nextId(),
-              type: "text" as const,
-              zIndex: 1,
-              opacity: 1,
-              rotation: 0,
-              placement: { col: 500, row: 400, colSpan: 9000, rowSpan: 350 },
-              text: {
-                content: chunk.eyebrow!,
-                fontSize: 11,
-                fontWeight: 700,
-                fontStyle: "normal" as const,
-                textDecoration: "none" as const,
-                textAlign: "left" as const,
-                color: TEAL,
-                fontFamily: "mono" as const,
-                letterSpacing: "0.25em",
-              },
-            },
-          ]
-        : []),
-      // Headline
-      {
-        id: nextId(),
-        type: "text" as const,
-        zIndex: 1,
-        opacity: 1,
-        rotation: 0,
-        placement: { col: 500, row: headlineRow, colSpan: 9000, rowSpan: 1500 },
-        text: {
-          content: chunk.headline,
-          fontSize: 48,
-          fontWeight: 800,
-          fontStyle: "normal" as const,
-          textDecoration: "none" as const,
-          textAlign: "left" as const,
-          color: INK,
-          lineHeight: 1.1,
-        },
-      },
-      // Body
-      ...(chunk.body
-        ? [
-            {
-              id: nextId(),
-              type: "text" as const,
-              zIndex: 1,
-              opacity: 1,
-              rotation: 0,
-              placement: { col: 500, row: bodyRow, colSpan: 9000, rowSpan: 2700 },
-              text: {
-                content: chunk.body,
-                fontSize: 20,
-                fontWeight: 400,
-                fontStyle: "normal" as const,
-                textDecoration: "none" as const,
-                textAlign: "left" as const,
-                color: MUTED,
-                lineHeight: 1.5,
-              },
-            },
-          ]
-        : []),
-    ];
-
-    // Board position: lay out in a 4-column grid so the graph view looks tidy
+  const nodes: SlideNode[] = chunks.map((chunk, i) => {
     const col = i % COLS_PER_ROW;
     const row = Math.floor(i / COLS_PER_ROW);
-
     return {
-      id,
+      id: `gen-${Date.now()}-${i}`,
       index: i + 1,
       title: chunk.headline,
       kind: chunk.kind as SceneKind,
@@ -194,19 +124,31 @@ function buildSlideNodes(chunks: ChunkResult[]): SlideNode[] {
       width: COL_W,
       height: ROW_H,
       state: "rendered" as SlideState,
-      thumb: "list" as const,
-      elements,
+      // Raw bucket: no slide design exists yet.
+      // elements[] populated by slide-design agent on double-click (see slideDesignAgent.ts).
+      designStatus: "bucket" as DesignStatus,
+      elements: [],
       candidates: [],
       activeDesignId: null,
     };
   });
+
+  // Sequence edges: narrative flows left-to-right through the argument.
+  // These are the default connections; user can rewire them in the graph.
+  const edges: Edge[] = nodes.slice(0, -1).map((n, i) => ({
+    from: n.id,
+    to: nodes[i + 1].id,
+    relation: "sequence" as EdgeRelation,
+  }));
+
+  return { nodes, edges };
 }
 
 // ── Public API ────────────────────────────────────────────────────────────────
 export async function hydrateToSlides(
   text: string,
   duration: TargetDuration,
-): Promise<SlideNode[]> {
+): Promise<HydrateResult> {
   const targetCount = durationToSlideCount(duration);
 
   let chunks: ChunkResult[];

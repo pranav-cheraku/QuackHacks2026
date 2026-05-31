@@ -36,6 +36,11 @@ export type SceneStatus = "final" | "draft" | "in-review";
 // (EditorView / SlideThumb). Kept until that view is reworked.
 export type SlideState = "rendered" | "ingredient";
 
+// "bucket"  = raw content from chunker, no slide design yet — lives in graph only.
+// "designed" = has a realized layout (elements[]); viewable/editable in slide editor.
+// undefined is treated as "designed" for backwards compat with INITIAL_NODES.
+export type DesignStatus = "bucket" | "designed";
+
 // Slides View (slide editor) — a design alternative for a scene.
 export interface SlideCandidate {
   id: string;
@@ -56,6 +61,16 @@ export interface SlideNode {
   width?: number;
   height?: number;
   elements: import("./slide-model").SlideElement[];
+  // Legacy fields consumed by the Slides View until it is reworked
+  rotation?: number;
+  state?: SlideState;
+  thumb?: "title" | "stats" | "chart" | "list" | "closing";
+  components?: ComponentType[];
+  candidates?: import("./projektor-data").SlideCandidate[];
+  activeDesignId?: string | null;
+  // "bucket" = raw content from chunker, no design yet.
+  // "designed" (or undefined) = has a realized layout in elements[].
+  designStatus?: DesignStatus;
 }
 
 export type EdgeRelation = "supports" | "contrasts" | "builds-on" | "sequence";
@@ -78,18 +93,18 @@ export const INITIAL_NODES: SlideNode[] = [
     body: "Meridian turns fleet telemetry into decisions — before the delay happens.",
     x: 560,
     y: 70,
-    width: 340,
-    height: 190,
-    state: "rendered",
-    thumb: "title",
     width: 280,
     height: 170,
+    state: "rendered",
+    thumb: "title",
     elements: [],
   },
   {
     id: "n2",
     index: 2,
     title: "By the Numbers",
+    kind: "data",
+    status: "final",
     x: 430,
     y: 150,
     rotation: 0.8,
@@ -104,6 +119,8 @@ export const INITIAL_NODES: SlideNode[] = [
     id: "n3",
     index: 3,
     title: "Market Landscape",
+    kind: "problem",
+    status: "in-review",
     x: 800,
     y: 90,
     rotation: -0.6,
@@ -118,6 +135,8 @@ export const INITIAL_NODES: SlideNode[] = [
     id: "n4",
     index: 4,
     title: "Growth Trajectory",
+    kind: "data",
+    status: "draft",
     x: 1140,
     y: 200,
     rotation: 1.4,
@@ -131,6 +150,8 @@ export const INITIAL_NODES: SlideNode[] = [
     id: "n5",
     index: 5,
     title: "Three Bets for Q4",
+    kind: "data",
+    status: "draft",
     x: 1480,
     y: 110,
     rotation: -0.4,
@@ -145,6 +166,8 @@ export const INITIAL_NODES: SlideNode[] = [
     id: "n6",
     index: 6,
     title: "Closing",
+    kind: "title",
+    status: "draft",
     x: 1820,
     y: 200,
     rotation: 0.6,

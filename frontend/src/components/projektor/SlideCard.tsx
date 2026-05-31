@@ -1,4 +1,4 @@
-import { Check, RefreshCw } from "lucide-react";
+import { Check, RefreshCw, Loader2 } from "lucide-react";
 import { useRef } from "react";
 import type { SlideNode, SceneKind, SceneStatus } from "@/lib/projektor-data";
 
@@ -6,8 +6,10 @@ interface Props {
   node: SlideNode;
   selected: boolean;
   dimmed?: boolean;
+  isGeneratingDesign?: boolean;
   onSelect: () => void;
   onOpenEditor: () => void;
+  onDesignBucket: () => void;
   onMove: (x: number, y: number) => void;
   zoom: number;
 }
@@ -34,11 +36,14 @@ export function SlideCard({
   node,
   selected,
   dimmed = false,
+  isGeneratingDesign = false,
   onSelect,
   onOpenEditor,
+  onDesignBucket,
   onMove,
   zoom,
 }: Props) {
+  const isBucket = node.designStatus === "bucket";
   const dragging = useRef<{ ox: number; oy: number } | null>(null);
   const w = node.width ?? 320;
 
@@ -70,7 +75,8 @@ export function SlideCard({
       className="absolute select-none transition-opacity"
       style={{ left: node.x, top: node.y, width: w, opacity: dimmed ? 0.4 : 1 }}
       onMouseDown={onMouseDown}
-      onDoubleClick={onOpenEditor}
+      // Double-click: raw buckets trigger the slide-design agent; designed nodes open the editor.
+      onDoubleClick={isBucket ? onDesignBucket : onOpenEditor}
     >
       <div
         className={`rounded-2xl bg-card border transition-all ${
@@ -109,21 +115,30 @@ export function SlideCard({
           <Preview node={node} />
         </div>
 
-        {/* Generate (selected only) */}
-        <div className="px-4 pb-3.5 pt-3 flex justify-end">
+        {/* Action row */}
+        <div className="px-4 pb-3.5 pt-3 flex items-center justify-between">
+          {isBucket && (
+            <span className="font-mono text-[9px] uppercase tracking-widest px-2 py-0.5 rounded"
+              style={{ background: "oklch(0.95 0.02 192)", color: "var(--accent)" }}>
+              RAW BUCKET
+            </span>
+          )}
           {selected ? (
             <button
               data-no-drag
-              className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md text-[12px] font-semibold transition-opacity hover:opacity-90"
-              style={{
-                background: "var(--accent-soft)",
-                color: "var(--accent)",
-              }}
+              onClick={isBucket ? onDesignBucket : onOpenEditor}
+              disabled={isGeneratingDesign}
+              className="ml-auto inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md text-[12px] font-semibold transition-opacity hover:opacity-90 disabled:opacity-60"
+              style={{ background: "var(--accent-soft)", color: "var(--accent)" }}
             >
-              <RefreshCw size={12} /> Generate
+              {isGeneratingDesign
+                ? <><Loader2 size={12} className="animate-spin" /> Generating…</>
+                : isBucket
+                  ? <><RefreshCw size={12} /> Design slide</>
+                  : <><RefreshCw size={12} /> Redesign</>}
             </button>
           ) : (
-            <div className="h-[26px]" />
+            <div className="ml-auto h-[26px]" />
           )}
         </div>
       </div>

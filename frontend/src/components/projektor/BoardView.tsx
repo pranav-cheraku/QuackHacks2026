@@ -1,4 +1,4 @@
-import { useRef, useState } from "react";
+import { useRef, useState, useCallback } from "react";
 import { GraphMapPanel } from "./GraphMapPanel";
 import { GraphToolRail } from "./GraphToolRail";
 import { StatusFilterPanel } from "./StatusFilterPanel";
@@ -9,10 +9,13 @@ import {
   INITIAL_NODES,
   INITIAL_EDGES,
   type SlideNode,
+  type SlideCandidate,
   type Edge,
   type SceneStatus,
+  type DesignStatus,
 } from "@/lib/projektor-data";
-import { Maximize2, Minus, Plus, Wand2 } from "lucide-react";
+import { generateSlideCandidates } from "@/lib/slideDesignAgent";
+import { Maximize2, Minus, Plus, Wand2, X } from "lucide-react";
 import {
   Tooltip,
   TooltipContent,
@@ -24,6 +27,9 @@ interface Props {
   zoom: number;
   setZoom: (z: number) => void;
   onOpenEditor: (nodeId: string) => void;
+  onDesignApplied: (updatedNode: SlideNode) => void;
+  initialNodes?: SlideNode[];
+  initialEdges?: Edge[];
 }
 
 // Placeholder chosen spine — real pick logic lands with the branch model.
@@ -49,10 +55,10 @@ function anchor(n: SlideNode, side: "right" | "left" | "top" | "bottom") {
   return { x: n.x + w / 2, y: n.y + h };
 }
 
-export function BoardView({ zoom, setZoom, onOpenEditor }: Props) {
-  const [nodes, setNodes] = useState<SlideNode[]>(INITIAL_NODES);
-  const [edges] = useState<Edge[]>(INITIAL_EDGES);
-  const [selected, setSelected] = useState<string | null>("n1");
+export function BoardView({ zoom, setZoom, onOpenEditor, onDesignApplied, initialNodes, initialEdges }: Props) {
+  const [nodes, setNodes] = useState<SlideNode[]>(initialNodes ?? INITIAL_NODES);
+  const [edges] = useState<Edge[]>(initialEdges ?? INITIAL_EDGES);
+  const [selected, setSelected] = useState<string | null>(null);
   const [pan, setPan] = useState({ x: 0, y: 0 });
   const [focusPicked, setFocusPicked] = useState(false);
   const [outlineOpen, setOutlineOpen] = useState(false);
@@ -61,8 +67,64 @@ export function BoardView({ zoom, setZoom, onOpenEditor }: Props) {
   const [activeStatuses, setActiveStatuses] = useState<Set<SceneStatus>>(
     () => new Set<SceneStatus>(["final", "in-review", "draft"]),
   );
+  // Slide-design agent state
+  const [designingNodeId, setDesigningNodeId] = useState<string | null>(null);
+  const [generatingNodeId, setGeneratingNodeId] = useState<string | null>(null);
   const panRef = useRef<{ x: number; y: number } | null>(null);
   const viewportRef = useRef<HTMLDivElement>(null);
+
+  // ── Slide-design agent ──────────────────────────────────────────────────────
+  // Double-clicking a bucket triggers generateSlideCandidates, then shows the
+  // candidate-picker overlay. On pick, the node transitions to "designed" and
+  // the editor is opened for that scene.
+  const handleDesignBucket = useCallback(async (nodeId: string) => {
+    const node = nodes.find((n) => n.id === nodeId);
+    if (!node) return;
+
+    // If candidates already exist, go straight to the picker
+    if (node.candidates?.length) {
+      setDesigningNodeId(nodeId);
+      return;
+    }
+
+    // SLIDE-DESIGN AGENT CALL (swap point — see src/lib/slideDesignAgent.ts)
+    setGeneratingNodeId(nodeId);
+    try {
+      const candidates = await generateSlideCandidates(node);
+      setNodes((ns) =>
+        ns.map((n) => (n.id === nodeId ? { ...n, candidates } : n)),
+      );
+      setDesigningNodeId(nodeId);
+    } catch (err) {
+      console.error("[slide-design] Failed to generate candidates:", err);
+    } finally {
+      setGeneratingNodeId(null);
+    }
+  }, [nodes]);
+
+  const handlePickCandidate = useCallback((nodeId: string, candidate: SlideCandidate) => {
+    const updated: Partial<SlideNode> = {
+      elements: candidate.elements,
+      activeDesignId: candidate.id,
+      designStatus: "designed" as DesignStatus,
+    };
+    let updatedNode: SlideNode | undefined;
+    setNodes((ns) =>
+      ns.map((n) => {
+        if (n.id !== nodeId) return n;
+        updatedNode = { ...n, ...updated };
+        return updatedNode;
+      }),
+    );
+    setDesigningNodeId(null);
+    // GRAPH SYNC: propagate design back to Projektor.deck so EditorView
+    // (seeded from deck) receives the realized layout on next mode switch.
+    if (updatedNode) {
+      onDesignApplied(updatedNode);
+      // Open the slide editor for the newly designed scene
+      onOpenEditor(nodeId);
+    }
+  }, [onDesignApplied, onOpenEditor]);
 
   const findNode = (id: string) => nodes.find((n) => n.id === id)!;
 
@@ -294,8 +356,10 @@ export function BoardView({ zoom, setZoom, onOpenEditor }: Props) {
                 node={n}
                 selected={selected === n.id}
                 dimmed={isNodeDimmed(n)}
+                isGeneratingDesign={generatingNodeId === n.id}
                 onSelect={() => setSelected(n.id)}
                 onOpenEditor={() => onOpenEditor(n.id)}
+                onDesignBucket={() => handleDesignBucket(n.id)}
                 onMove={(x, y) =>
                   setNodes((ns) =>
                     ns.map((m) => (m.id === n.id ? { ...m, x, y } : m)),
@@ -400,6 +464,57 @@ export function BoardView({ zoom, setZoom, onOpenEditor }: Props) {
           </div>
         </TooltipProvider>
       </div>
+
+      {/* ── Candidate-picker overlay ──────────────────────────────────────────
+           Shows when a bucket has been designed and the user needs to pick a layout.
+           CANDIDATE-PICKER UI: replace this minimal overlay with a richer gallery
+           (slide thumbnail previews) when the design system is ready.
+           For now: text labels + "Use this design" buttons. */}
+      {designingNodeId && (() => {
+        const node = nodes.find((n) => n.id === designingNodeId);
+        const candidates = node?.candidates ?? [];
+        return (
+          <div className="absolute inset-0 bg-ink/40 backdrop-blur-sm flex items-center justify-center z-50">
+            <div className="bg-card border border-border rounded-2xl shadow-[0_8px_40px_-8px_rgba(0,0,0,0.3)] w-[560px] max-h-[80vh] flex flex-col overflow-hidden">
+              <div className="flex items-center justify-between px-5 py-4 border-b border-border shrink-0">
+                <div>
+                  <div className="font-semibold text-[15px] text-ink">Choose a layout</div>
+                  <div className="text-[12px] text-muted-foreground mt-0.5 font-mono truncate max-w-[360px]">
+                    {node?.title}
+                  </div>
+                </div>
+                <button
+                  onClick={() => setDesigningNodeId(null)}
+                  className="w-8 h-8 flex items-center justify-center rounded-lg hover:bg-canvas/60 text-muted-foreground"
+                >
+                  <X size={14} />
+                </button>
+              </div>
+              <div className="flex-1 overflow-y-auto p-4 grid grid-cols-2 gap-3">
+                {candidates.map((cand) => (
+                  <button
+                    key={cand.id}
+                    data-no-drag
+                    onClick={() => handlePickCandidate(designingNodeId, cand)}
+                    className="group text-left rounded-xl border border-border bg-white hover:border-[color:var(--accent)] hover:shadow-[0_0_0_2px_var(--accent-soft)] transition-all overflow-hidden"
+                  >
+                    {/* Preview thumbnail — placeholder until SlideThumb renders elements */}
+                    <div className="aspect-[16/9] bg-canvas/60 border-b border-border flex items-center justify-center text-muted-foreground text-[11px] font-mono">
+                      {cand.label}
+                    </div>
+                    <div className="px-3 py-2.5 flex items-center justify-between">
+                      <span className="text-[13px] font-semibold text-ink">{cand.label}</span>
+                      <span className="text-[11px] text-[color:var(--accent)] font-semibold opacity-0 group-hover:opacity-100 transition-opacity">
+                        Use this →
+                      </span>
+                    </div>
+                  </button>
+                ))}
+              </div>
+            </div>
+          </div>
+        );
+      })()}
     </div>
   );
 }

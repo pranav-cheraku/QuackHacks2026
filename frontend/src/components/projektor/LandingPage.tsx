@@ -1,11 +1,10 @@
 import { useState } from "react";
 import { Logo } from "./Logo";
-import { hydrateToSlides, type TargetDuration } from "@/lib/chunker";
-import type { SlideNode } from "@/lib/projektor-data";
+import { hydrateToSlides, type TargetDuration, type HydrateResult } from "@/lib/chunker";
 import { Globe, Mic, Paperclip, ImageIcon, ArrowRight, Loader2 } from "lucide-react";
 
 interface Props {
-  onGenerate: (nodes: SlideNode[]) => void;
+  onGenerate: (result: HydrateResult) => void;
   onSkip: () => void;
 }
 
@@ -36,8 +35,8 @@ export function LandingPage({ onGenerate, onSkip }: Props) {
     setError(null);
     setIsGenerating(true);
     try {
-      const nodes = await hydrateToSlides(text.trim(), duration);
-      onGenerate(nodes);
+      const result = await hydrateToSlides(text.trim(), duration);
+      onGenerate(result);
     } catch (err) {
       setError(
         err instanceof Error ? err.message : "Something went wrong. Try again.",

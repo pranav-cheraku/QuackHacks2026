@@ -1,4 +1,4 @@
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { GraphMapPanel } from "./GraphMapPanel";
 import { GraphToolRail } from "./GraphToolRail";
 import { StatusFilterPanel } from "./StatusFilterPanel";
@@ -18,10 +18,9 @@ import {
   type SceneStatus,
   type SceneRole,
   type SceneKind,
-  type ComponentType,
   type ContentBlock,
 } from "@/lib/projektor-data";
-import { Maximize2, Minus, Plus, Wand2 } from "lucide-react";
+import { Maximize2, Minus, Plus, Wand2, X } from "lucide-react";
 import {
   Tooltip,
   TooltipContent,
@@ -153,13 +152,22 @@ function buildPath(
   return `M ${a.x} ${a.y} C ${a.x} ${cy1}, ${b.x} ${cy2}, ${b.x} ${b.y}`;
 }
 
-function anchor(n: SlideNode, side: "right" | "left" | "top" | "bottom") {
-  const w = n.width ?? 320;
-  const h = n.height ?? 180;
-  if (side === "right") return { x: n.x + w, y: n.y + h / 2 };
-  if (side === "left") return { x: n.x, y: n.y + h / 2 };
-  if (side === "top") return { x: n.x + w / 2, y: n.y };
-  return { x: n.x + w / 2, y: n.y + h };
+// All nodes that can reach `id` (its ancestors). Re-pointing an arrow at one of
+// these would create a cycle, so they're blocked as drop targets.
+function ancestorsOf(id: string, es: Edge[]): Set<string> {
+  const parentsMap = new Map<string, string[]>();
+  es.forEach((e) =>
+    parentsMap.set(e.to, [...(parentsMap.get(e.to) ?? []), e.from]),
+  );
+  const out = new Set<string>();
+  const stack = [...(parentsMap.get(id) ?? [])];
+  while (stack.length) {
+    const cur = stack.pop()!;
+    if (out.has(cur)) continue;
+    out.add(cur);
+    stack.push(...(parentsMap.get(cur) ?? []));
+  }
+  return out;
 }
 
 export function BoardView({ zoom, setZoom, onOpenEditor }: Props) {
@@ -176,17 +184,85 @@ export function BoardView({ zoom, setZoom, onOpenEditor }: Props) {
   const [activeStatuses, setActiveStatuses] = useState<Set<SceneStatus>>(
     () => new Set<SceneStatus>(["final", "in-review", "draft"]),
   );
+  // Active wire drag. `parent` (the tail/source) stays pinned; the arrowhead
+  // follows the cursor (canvas coords) hunting for a child. Two modes:
+  //   • "repoint" — moving an existing edge's head (edgeIndex set).
+  //   • "create"  — drawing a brand-new edge from `parent` (edgeIndex null).
+  // `invalid` = nodes that can't be the child (parent itself, its existing
+  // children → dup, any ancestor → cycle). `hover` = valid node under cursor.
+  const [rewire, setRewire] = useState<{
+    mode: "repoint" | "create";
+    edgeIndex: number | null;
+    parent: string;
+    invalid: Set<string>;
+    cursor: { x: number; y: number };
+    hover: string | null;
+  } | null>(null);
+  // Real rendered card heights (canvas units), reported by each card. Used so
+  // edges/affordances anchor flush to a card's visible bottom instead of the
+  // fixed node.height guess (which left a gap and skewed arrow length).
+  const [heights, setHeights] = useState<Record<string, number>>({});
+  const reportHeight = (id: string, h: number) =>
+    setHeights((prev) => (prev[id] === h ? prev : { ...prev, [id]: h }));
+  // Edge selection/hover (by index) for deleting a single connection.
+  const [selectedEdge, setSelectedEdge] = useState<number | null>(null);
+  const [hoverEdge, setHoverEdge] = useState<number | null>(null);
   const panRef = useRef<{ x: number; y: number } | null>(null);
   const viewportRef = useRef<HTMLDivElement>(null);
   const blockSeq = useRef(0); // monotonic ids for added content blocks
   const genSeq = useRef(0); // monotonic ids for generated candidate nodes
+  const newSeq = useRef(0); // monotonic ids for blank scenes added from the rail
 
   const findNode = (id: string) => nodes.find((n) => n.id === id)!;
 
-  // Selecting a node always (re)opens the inspector on it.
+  // Card height: measured if known, else the node's declared height fallback.
+  const heightOf = (n: SlideNode) => heights[n.id] ?? n.height ?? 180;
+  // Edge anchor on a node's side, using the measured height for vertical edges.
+  const anchorOf = (
+    n: SlideNode,
+    side: "right" | "left" | "top" | "bottom",
+  ) => {
+    const w = n.width ?? 320;
+    const h = heightOf(n);
+    if (side === "right") return { x: n.x + w, y: n.y + h / 2 };
+    if (side === "left") return { x: n.x, y: n.y + h / 2 };
+    if (side === "top") return { x: n.x + w / 2, y: n.y };
+    return { x: n.x + w / 2, y: n.y + h };
+  };
+
+  // A node's incoming edges (by index). Used to fan multiple arrows across its
+  // top edge so they don't stack on one point (and neither do their handles).
+  const incomingByChild = new Map<string, number[]>();
+  edges.forEach((e, i) => {
+    const list = incomingByChild.get(e.to);
+    if (list) list.push(i);
+    else incomingByChild.set(e.to, [i]);
+  });
+  // Where edge `i`'s arrowhead lands on its child's top edge: centered for a
+  // lone arrow, evenly spread when the child has several incoming arrows.
+  const topAnchorOf = (edgeIndex: number) => {
+    const e = edges[edgeIndex];
+    const child = findNode(e.to);
+    const list = incomingByChild.get(e.to) ?? [edgeIndex];
+    const k = Math.max(0, list.indexOf(edgeIndex));
+    const w = child.width ?? 320;
+    return { x: child.x + (w * (k + 1)) / (list.length + 1), y: child.y };
+  };
+
+  // Selecting a node always (re)opens the inspector on it (and drops any edge
+  // selection — node and edge selection are mutually exclusive).
   const selectNode = (id: string) => {
     setSelected(id);
+    setSelectedEdge(null);
     setInspectorOpen(true);
+  };
+
+  // Remove a single connection (both scenes stay). Used by the edge × button
+  // and Delete-when-an-edge-is-selected.
+  const deleteEdge = (index: number) => {
+    setEdges((es) => es.filter((_, i) => i !== index));
+    setSelectedEdge(null);
+    setHoverEdge(null);
   };
 
   // --- Inspect-panel updaters ----------------------------------------------
@@ -200,19 +276,28 @@ export function BoardView({ zoom, setZoom, onOpenEditor }: Props) {
     setNodes((ns) =>
       ns.map((n) => (n.id === id ? { ...n, locked: !n.locked } : n)),
     );
-  const addBlock = (id: string, type: ComponentType) => {
+  const addBlock = (id: string, draft: Omit<ContentBlock, "id">) => {
     blockSeq.current += 1;
-    const block: ContentBlock = {
-      id: `${id}-b-${blockSeq.current}`,
-      type,
-      label: type,
-    };
+    const block: ContentBlock = { id: `${id}-b-${blockSeq.current}`, ...draft };
     setNodes((ns) =>
       ns.map((n) =>
         n.id === id ? { ...n, blocks: [...(n.blocks ?? []), block] } : n,
       ),
     );
   };
+  const moveBlock = (id: string, blockId: string, cx: number, cy: number) =>
+    setNodes((ns) =>
+      ns.map((n) =>
+        n.id === id
+          ? {
+              ...n,
+              blocks: (n.blocks ?? []).map((b) =>
+                b.id === blockId ? { ...b, cx, cy } : b,
+              ),
+            }
+          : n,
+      ),
+    );
   const removeBlock = (id: string, blockId: string) =>
     setNodes((ns) =>
       ns.map((n) =>
@@ -257,25 +342,14 @@ export function BoardView({ zoom, setZoom, onOpenEditor }: Props) {
 
   // Delete: remove the node (and any subtree under it) for good — unlike
   // Discard, there's no coming back. Re-tidies what's left.
+  // Permanently delete just this node (any node — committed or a discarded
+  // ghost). Its connecting arrows are pruned; children keep their place and
+  // become unparented (no cascade, no auto-tidy).
   const deleteNode = (id: string) => {
-    const toRemove = new Set<string>([id]);
-    let grew = true;
-    while (grew) {
-      grew = false;
-      edges.forEach((e) => {
-        if (toRemove.has(e.from) && !toRemove.has(e.to)) {
-          toRemove.add(e.to);
-          grew = true;
-        }
-      });
-    }
-    const nextNodes = nodes.filter((n) => !toRemove.has(n.id));
-    const nextEdges = edges.filter(
-      (e) => !toRemove.has(e.from) && !toRemove.has(e.to),
-    );
-    setEdges(nextEdges);
-    setNodes(tidyNodes(nextNodes, nextEdges));
-    if (selected && toRemove.has(selected)) setSelected(null);
+    setNodes((ns) => ns.filter((n) => n.id !== id));
+    setEdges((es) => es.filter((e) => e.from !== id && e.to !== id));
+    setSelectedEdge(null); // indices shift when edges are removed
+    if (selected === id) setSelected(null);
   };
 
   const selectedNode = selected
@@ -376,6 +450,7 @@ export function BoardView({ zoom, setZoom, onOpenEditor }: Props) {
   const onCanvasMouseDown = (e: React.MouseEvent) => {
     if ((e.target as HTMLElement).closest("[data-node]")) return;
     setSelected(null);
+    setSelectedEdge(null);
     panRef.current = { x: e.clientX - pan.x, y: e.clientY - pan.y };
     const move = (ev: MouseEvent) => {
       if (!panRef.current) return;
@@ -429,6 +504,183 @@ export function BoardView({ zoom, setZoom, onOpenEditor }: Props) {
     setZoom(Math.min(200, Math.max(30, pct + dir * 5)) / 100);
   };
 
+  // Latest pan/zoom for the native wheel listener (attached once, reads refs to
+  // avoid re-binding on every transform change).
+  const viewRef = useRef({ pan, zoom });
+  viewRef.current = { pan, zoom };
+
+  // Ctrl/⌘ + wheel and trackpad pinch (macOS pinch fires wheel events with
+  // ctrlKey set) zoom continuously toward the cursor. The listener is native +
+  // non-passive so preventDefault stops the browser's own page-zoom; React's
+  // onWheel can't (React 19 registers wheel as passive). Plain scroll is left
+  // alone — panning stays drag-only.
+  useEffect(() => {
+    const vp = viewportRef.current;
+    if (!vp) return;
+    const ZOOM_SENSITIVITY = 0.009;
+    const onWheel = (e: WheelEvent) => {
+      if (!e.ctrlKey && !e.metaKey) return;
+      e.preventDefault();
+      const { pan: p, zoom: z } = viewRef.current;
+      const next = Math.min(
+        2,
+        Math.max(0.3, z * Math.exp(-e.deltaY * ZOOM_SENSITIVITY)),
+      );
+      if (next === z) return;
+      const rect = vp.getBoundingClientRect();
+      const mx = e.clientX - rect.left;
+      const my = e.clientY - rect.top;
+      const cx = (mx - p.x) / z; // canvas point under the pointer
+      const cy = (my - p.y) / z;
+      setZoom(Number(next.toFixed(4)));
+      setPan({ x: mx - cx * next, y: my - cy * next });
+    };
+    vp.addEventListener("wheel", onWheel, { passive: false });
+    return () => vp.removeEventListener("wheel", onWheel);
+  }, [setZoom]);
+
+  // Delete/Backspace removes the selected edge. Guarded so it never fires while
+  // the board is hidden (offsetParent null under Slides view) or while typing.
+  useEffect(() => {
+    if (selectedEdge == null) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== "Delete" && e.key !== "Backspace") return;
+      if (!viewportRef.current?.offsetParent) return; // board not visible
+      const t = e.target as HTMLElement | null;
+      if (
+        t &&
+        (t.tagName === "INPUT" ||
+          t.tagName === "TEXTAREA" ||
+          t.isContentEditable)
+      )
+        return;
+      e.preventDefault();
+      deleteEdge(selectedEdge);
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [selectedEdge]);
+
+  // Screen (client) point → canvas coords, inverting the pan/zoom transform.
+  const toCanvas = (clientX: number, clientY: number) => {
+    const vp = viewportRef.current!;
+    const r = vp.getBoundingClientRect();
+    const { pan: p, zoom: z } = viewRef.current;
+    return { x: (clientX - r.left - p.x) / z, y: (clientY - r.top - p.y) / z };
+  };
+
+  // The valid node under a screen point during a rewire drag, or null.
+  const dropTargetAt = (
+    clientX: number,
+    clientY: number,
+    invalid: Set<string>,
+  ) => {
+    const el = document.elementFromPoint(
+      clientX,
+      clientY,
+    ) as HTMLElement | null;
+    const id =
+      el?.closest<HTMLElement>("[data-node-id]")?.dataset.nodeId ?? null;
+    return id && !invalid.has(id) ? id : null;
+  };
+
+  // Drag an arrow's head (repoint) or pull a brand-new arrow off a node's
+  // connector (create). The source/tail stays pinned to `source`; dropping on a
+  // valid node sets/creates the edge. Node positions are left alone (no tidy).
+  const beginWire = (
+    opts: {
+      mode: "repoint" | "create";
+      edgeIndex: number | null;
+      source: string;
+    },
+    e: React.MouseEvent,
+  ) => {
+    e.stopPropagation();
+    e.preventDefault();
+    setSelectedEdge(null); // edge indices may shift after this drag
+    setHoverEdge(null);
+    const { source } = opts;
+    const invalid = ancestorsOf(source, edges);
+    invalid.add(source); // no self-loop
+    // The source's existing children (incl. the moved edge's current child) →
+    // would duplicate, so they're not valid drops.
+    edges.forEach((e2) => e2.from === source && invalid.add(e2.to));
+
+    setRewire({
+      mode: opts.mode,
+      edgeIndex: opts.edgeIndex,
+      parent: source,
+      invalid,
+      cursor: toCanvas(e.clientX, e.clientY),
+      hover: null,
+    });
+
+    const move = (ev: MouseEvent) =>
+      setRewire((r) =>
+        r
+          ? {
+              ...r,
+              cursor: toCanvas(ev.clientX, ev.clientY),
+              hover: dropTargetAt(ev.clientX, ev.clientY, invalid),
+            }
+          : r,
+      );
+
+    const up = (ev: MouseEvent) => {
+      window.removeEventListener("mousemove", move);
+      window.removeEventListener("mouseup", up);
+      const target = dropTargetAt(ev.clientX, ev.clientY, invalid);
+      if (target) {
+        if (opts.mode === "repoint" && opts.edgeIndex !== null) {
+          const idx = opts.edgeIndex;
+          setEdges((es) =>
+            es.map((e2, i) => (i === idx ? { ...e2, to: target } : e2)),
+          );
+        } else {
+          setEdges((es) => [...es, { from: source, to: target }]);
+        }
+      }
+      setRewire(null);
+    };
+
+    window.addEventListener("mousemove", move);
+    window.addEventListener("mouseup", up);
+  };
+
+  // Drop a blank scene at the viewport center, unattached. The user wires it up
+  // afterwards by dragging a connection onto it.
+  const createSlide = () => {
+    newSeq.current += 1;
+    const vp = viewportRef.current;
+    const w = 320;
+    const h = 180;
+    const cx = vp ? (vp.clientWidth / 2 - pan.x) / zoom : 1200;
+    const cy = vp ? (vp.clientHeight / 2 - pan.y) / zoom : 400;
+    const id = `new-${newSeq.current}`;
+    const node: SlideNode = {
+      id,
+      index: nodes.length + 1,
+      title: "New scene",
+      kind: "title",
+      status: "draft",
+      x: cx - w / 2,
+      y: cy - h / 2,
+      width: w,
+      height: h,
+      role: "claim",
+      locked: false,
+      blocks: [],
+      state: "rendered",
+      thumb: "title",
+      elements: [],
+      candidates: [],
+      activeDesignId: null,
+    };
+    setNodes((ns) => [...ns, node]);
+    setSelected(id);
+    setInspectorOpen(true);
+  };
+
   // Drilling into a scene's content swaps the whole board for its content graph.
   const contentScene = contentSceneId
     ? (nodes.find((n) => n.id === contentSceneId) ?? null)
@@ -441,6 +693,7 @@ export function BoardView({ zoom, setZoom, onOpenEditor }: Props) {
           onBack={() => setContentSceneId(null)}
           onAddBlock={addBlock}
           onRemoveBlock={removeBlock}
+          onMoveBlock={moveBlock}
         />
       </div>
     );
@@ -481,26 +734,67 @@ export function BoardView({ zoom, setZoom, onOpenEditor }: Props) {
               </marker>
             </defs>
             {edges.map((e, i) => {
-              const a = anchor(findNode(e.from), "bottom");
-              const b = anchor(findNode(e.to), "top");
+              if (rewire?.edgeIndex === i) return null; // rubber-band replaces it
+              const a = anchorOf(findNode(e.from), "bottom");
+              const b = topAnchorOf(i);
               const dim = isEdgeDimmed(e);
+              const active = selectedEdge === i || hoverEdge === i;
+              const d = buildPath(a, b);
               return (
-                <path
-                  key={i}
-                  d={buildPath(a, b)}
-                  fill="none"
-                  stroke="var(--accent)"
-                  strokeOpacity={dim ? 0.2 : 0.85}
-                  strokeWidth="1.75"
-                  strokeDasharray={e.dashed ? "5 4" : undefined}
-                  markerEnd="url(#arrowhead)"
-                />
+                <g key={i}>
+                  <path
+                    d={d}
+                    fill="none"
+                    stroke="var(--accent)"
+                    strokeOpacity={dim ? 0.2 : active ? 1 : 0.85}
+                    strokeWidth={active ? 3 : 1.75}
+                    strokeDasharray={e.dashed ? "5 4" : undefined}
+                    markerEnd="url(#arrowhead)"
+                  />
+                  {/* Invisible wide hit area: hover to reveal ×, click to select. */}
+                  {!rewire && (
+                    <path
+                      d={d}
+                      fill="none"
+                      stroke="transparent"
+                      strokeWidth={18}
+                      style={{ pointerEvents: "stroke", cursor: "pointer" }}
+                      onMouseEnter={() => setHoverEdge(i)}
+                      onMouseLeave={() =>
+                        setHoverEdge((h) => (h === i ? null : h))
+                      }
+                      onMouseDown={(ev) => ev.stopPropagation()}
+                      onClick={(ev) => {
+                        ev.stopPropagation();
+                        setSelected(null);
+                        setSelectedEdge(i);
+                      }}
+                    />
+                  )}
+                </g>
               );
             })}
+            {/* Live rubber-band while re-wiring: tail stays pinned to the
+                parent's bottom, arrowhead follows the cursor. */}
+            {rewire &&
+              (() => {
+                const a = anchorOf(findNode(rewire.parent), "bottom");
+                return (
+                  <path
+                    d={buildPath(a, rewire.cursor)}
+                    fill="none"
+                    stroke="var(--accent)"
+                    strokeOpacity={0.9}
+                    strokeWidth="2"
+                    strokeDasharray="6 4"
+                    markerEnd="url(#arrowhead)"
+                  />
+                );
+              })()}
             {/* Short connectors down to each leaf's Generate-next node */}
             {leafNodes.map((n) => {
               const cx = n.x + (n.width ?? 320) / 2;
-              const y1 = n.y + (n.height ?? 180);
+              const y1 = n.y + heightOf(n);
               const y2 = y1 + GEN_GAP;
               return (
                 <path
@@ -517,11 +811,13 @@ export function BoardView({ zoom, setZoom, onOpenEditor }: Props) {
             })}
           </svg>
 
-          {/* Edge relation labels */}
+          {/* Edge relation labels — hidden on the edge being hovered/selected,
+              where the delete × takes their place. */}
           {edges.map((e, i) => {
-            if (!e.relation) return null;
-            const a = anchor(findNode(e.from), "bottom");
-            const b = anchor(findNode(e.to), "top");
+            if (!e.relation || rewire?.edgeIndex === i) return null;
+            if (hoverEdge === i || selectedEdge === i) return null;
+            const a = anchorOf(findNode(e.from), "bottom");
+            const b = topAnchorOf(i);
             const dim = isEdgeDimmed(e);
             return (
               <div
@@ -540,6 +836,32 @@ export function BoardView({ zoom, setZoom, onOpenEditor }: Props) {
             );
           })}
 
+          {/* Delete-edge × — appears at the midpoint on hover or when selected. */}
+          {!rewire &&
+            edges.map((e, i) => {
+              if (hoverEdge !== i && selectedEdge !== i) return null;
+              const a = anchorOf(findNode(e.from), "bottom");
+              const b = topAnchorOf(i);
+              return (
+                <button
+                  key={`edge-x-${i}`}
+                  type="button"
+                  title="Delete this connection"
+                  onMouseEnter={() => setHoverEdge(i)}
+                  onMouseLeave={() => setHoverEdge((h) => (h === i ? null : h))}
+                  onMouseDown={(ev) => ev.stopPropagation()}
+                  onClick={(ev) => {
+                    ev.stopPropagation();
+                    deleteEdge(i);
+                  }}
+                  className="absolute -translate-x-1/2 -translate-y-1/2 flex items-center justify-center w-[22px] h-[22px] rounded-full bg-white border border-border shadow-[var(--sh-v)] text-muted-foreground hover:text-red-500 hover:border-red-300 transition-colors"
+                  style={{ left: (a.x + b.x) / 2, top: (a.y + b.y) / 2 }}
+                >
+                  <X size={12} strokeWidth={2.5} />
+                </button>
+              );
+            })}
+
           {/* Nodes */}
           {nodes.map((n) => {
             const onMove = (x: number, y: number) =>
@@ -547,18 +869,20 @@ export function BoardView({ zoom, setZoom, onOpenEditor }: Props) {
                 ns.map((m) => (m.id === n.id ? { ...m, x, y } : m)),
               );
             return (
-              <div key={n.id} data-node>
+              <div key={n.id} data-node data-node-id={n.id} className="group">
                 {n.ghost ? (
                   <GhostCard
                     node={n}
                     selected={selected === n.id}
                     dimmed={isNodeDimmed(n)}
+                    dropTarget={rewire?.hover === n.id}
                     onSelect={() => selectNode(n.id)}
                     onMove={onMove}
                     onAccept={() => acceptGhost(n.id)}
                     onDiscard={() => discardGhost(n.id)}
                     onReconsider={() => reconsiderGhost(n.id)}
                     onDelete={() => deleteNode(n.id)}
+                    onMeasure={(h) => reportHeight(n.id, h)}
                     zoom={zoom}
                   />
                 ) : (
@@ -566,11 +890,34 @@ export function BoardView({ zoom, setZoom, onOpenEditor }: Props) {
                     node={n}
                     selected={selected === n.id}
                     dimmed={isNodeDimmed(n)}
+                    dropTarget={rewire?.hover === n.id}
                     onSelect={() => selectNode(n.id)}
                     onOpenEditor={() => onOpenEditor(n.id)}
                     onMove={onMove}
+                    onMeasure={(h) => reportHeight(n.id, h)}
                     zoom={zoom}
                   />
+                )}
+                {/* Connect port — appears on hover; drag to draw a new arrow
+                    from this scene to another. Hidden while a wire is active. */}
+                {!rewire && !n.ghost && (
+                  <button
+                    type="button"
+                    title="Drag to connect this scene to another"
+                    onMouseDown={(ev) =>
+                      beginWire(
+                        { mode: "create", edgeIndex: null, source: n.id },
+                        ev,
+                      )
+                    }
+                    className="absolute flex items-center justify-center w-[22px] h-[22px] rounded-full bg-[var(--accent)] text-white border-2 border-white shadow-[var(--sh-v)] cursor-grab opacity-0 group-hover:opacity-100 hover:scale-110 transition-all"
+                    style={{
+                      left: n.x + (n.width ?? 320) / 2 - 11,
+                      top: n.y + heightOf(n) - 11,
+                    }}
+                  >
+                    <Plus size={13} strokeWidth={3} />
+                  </button>
                 )}
               </div>
             );
@@ -579,7 +926,7 @@ export function BoardView({ zoom, setZoom, onOpenEditor }: Props) {
           {/* Generate-next nodes — one per leaf, just below the card */}
           {leafNodes.map((n) => {
             const cx = n.x + (n.width ?? 320) / 2;
-            const top = n.y + (n.height ?? 180) + GEN_GAP;
+            const top = n.y + heightOf(n) + GEN_GAP;
             return (
               <div
                 key={`gen-node-${n.id}`}
@@ -594,6 +941,36 @@ export function BoardView({ zoom, setZoom, onOpenEditor }: Props) {
               </div>
             );
           })}
+
+          {/* Arrowhead grab handles — one per edge, sitting above each arrow's
+              landing point (fanned, so multiple arrows into one node each get
+              their own). Hidden during a drag so they never intercept the drop. */}
+          {!rewire &&
+            edges.map((e, i) => {
+              const b = topAnchorOf(i);
+              return (
+                <div
+                  key={`rewire-${i}`}
+                  className="absolute rounded-full bg-[var(--accent)] border-2 border-white shadow-[var(--sh-v)] cursor-grab hover:scale-150 transition-transform"
+                  style={{
+                    // Floated above the node (on the incoming arrow) so it never
+                    // sits on the card and steal node drag/selection.
+                    left: b.x - 7,
+                    top: b.y - 24,
+                    width: 14,
+                    height: 14,
+                    opacity: isEdgeDimmed(e) ? 0.25 : 0.9,
+                  }}
+                  title="Drag to re-point this arrow at a new child"
+                  onMouseDown={(ev) =>
+                    beginWire(
+                      { mode: "repoint", edgeIndex: i, source: e.from },
+                      ev,
+                    )
+                  }
+                />
+              );
+            })}
         </div>
 
         {/* Left tool rail */}
@@ -606,6 +983,7 @@ export function BoardView({ zoom, setZoom, onOpenEditor }: Props) {
           onToggleFocus={() => setFocusPicked((v) => !v)}
           minimapOpen={minimapOpen}
           onToggleMinimap={() => setMinimapOpen((v) => !v)}
+          onNewSlide={createSlide}
         />
 
         {/* Draggable popovers (independent — can be open together) */}

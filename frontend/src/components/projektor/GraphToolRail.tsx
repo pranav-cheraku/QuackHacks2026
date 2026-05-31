@@ -1,4 +1,10 @@
-import { ListTree, Route, ListFilter, Map as MapIcon } from "lucide-react";
+import {
+  ListTree,
+  Route,
+  ListFilter,
+  Map as MapIcon,
+  Plus,
+} from "lucide-react";
 import {
   Tooltip,
   TooltipContent,
@@ -15,6 +21,7 @@ interface Props {
   onToggleFocus: () => void;
   minimapOpen: boolean;
   onToggleMinimap: () => void;
+  onNewSlide: () => void;
 }
 
 // Floating left rail — canvas navigation/view tools only (per graph_view_spec;
@@ -29,6 +36,7 @@ export function GraphToolRail({
   onToggleFocus,
   minimapOpen,
   onToggleMinimap,
+  onNewSlide,
 }: Props) {
   return (
     <TooltipProvider
@@ -40,6 +48,16 @@ export function GraphToolRail({
         className="absolute left-4 top-1/2 -translate-y-1/2 z-10 flex flex-col items-center gap-1 p-1.5 rounded-2xl bg-chrome border border-border shadow-[var(--sh-v)]"
         onMouseDown={(e) => e.stopPropagation()}
       >
+        <RailButton
+          label="New slide"
+          tip="New slide — drops a blank scene you can connect anywhere"
+          onClick={onNewSlide}
+        >
+          <Plus size={18} />
+        </RailButton>
+
+        <div className="w-5 h-px bg-border my-0.5" />
+
         <RailButton
           label="Outline"
           tip="Outline — jump to any slide"

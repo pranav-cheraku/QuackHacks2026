@@ -3,6 +3,7 @@ import {
   Check,
   ChevronDown,
   ChevronRight,
+  LayoutGrid,
   Lock,
   RotateCcw,
   Sparkles,
@@ -16,10 +17,10 @@ import {
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
-import { AddContentMenu } from "./AddContentMenu";
+import { AddContent } from "./AddContent";
 import { blockIcon } from "@/lib/content-blocks";
 import type {
-  ComponentType,
+  ContentBlock,
   EdgeRelation,
   SceneRole,
   SceneStatus,
@@ -37,7 +38,7 @@ interface Props {
   onChangeRole: (id: string, r: SceneRole) => void;
   onChangeRelation: (toId: string, r: EdgeRelation) => void;
   onToggleLock: (id: string) => void;
-  onAddBlock: (id: string, type: ComponentType) => void;
+  onAddBlock: (id: string, block: Omit<ContentBlock, "id">) => void;
   onRemoveBlock: (id: string, blockId: string) => void;
   onOpenContent: (id: string) => void;
   onAccept: (id: string) => void;
@@ -177,6 +178,7 @@ export function ScenePanel({
           onAddBlock={onAddBlock}
           onRemoveBlock={onRemoveBlock}
           onOpenContent={onOpenContent}
+          onDelete={onDelete}
         />
       ) : (
         <StubTab tab={tab} title={node.title} />
@@ -196,6 +198,7 @@ function InspectTab({
   onAddBlock,
   onRemoveBlock,
   onOpenContent,
+  onDelete,
 }: {
   node: SlideNode;
   parentRelation: EdgeRelation | null;
@@ -204,9 +207,10 @@ function InspectTab({
   onChangeRole: (id: string, r: SceneRole) => void;
   onChangeRelation: (toId: string, r: EdgeRelation) => void;
   onToggleLock: (id: string) => void;
-  onAddBlock: (id: string, type: ComponentType) => void;
+  onAddBlock: (id: string, block: Omit<ContentBlock, "id">) => void;
   onRemoveBlock: (id: string, blockId: string) => void;
   onOpenContent: (id: string) => void;
+  onDelete: (id: string) => void;
 }) {
   const status = STATUS_OPTIONS.find((o) => o.value === node.status)!;
   const role = node.role ?? "claim";
@@ -335,19 +339,23 @@ function InspectTab({
 
         <div className="h-px bg-line-soft" />
 
-        {/* Content blocks — header opens the scene's content graph */}
+        {/* Content blocks — the header is a button that opens the scene's
+            content graph; below it, the list and the Add-content popup. */}
         <div>
-          <div className="flex items-center justify-between mb-2">
-            <button
-              type="button"
-              onClick={() => onOpenContent(node.id)}
-              className="flex items-center gap-1 text-[12px] font-semibold text-ink hover:text-accent transition-colors"
-            >
+          <button
+            type="button"
+            onClick={() => onOpenContent(node.id)}
+            className="w-full mb-2 flex items-center justify-between gap-2 px-3 py-2 rounded-lg border border-border bg-surface-2 hover:border-[color:var(--accent)] hover:bg-canvas/60 transition-colors"
+          >
+            <span className="flex items-center gap-2 text-[12.5px] font-semibold text-ink">
+              <LayoutGrid size={14} className="text-muted-foreground" />
               Content blocks
-              <ChevronRight size={13} className="text-muted-foreground" />
-            </button>
-            <AddContentMenu onAdd={(type) => onAddBlock(node.id, type)} />
-          </div>
+            </span>
+            <span className="flex items-center gap-1.5 text-muted-foreground">
+              <span className="text-[11px] font-mono">{blocks.length}</span>
+              <ChevronRight size={14} />
+            </span>
+          </button>
 
           {blocks.length === 0 ? (
             <div className="rounded-lg border border-dashed border-border px-3 py-4 text-center text-[12px] text-muted-foreground">
@@ -386,10 +394,14 @@ function InspectTab({
               })}
             </div>
           )}
+
+          <div className="mt-2">
+            <AddContent onAdd={(block) => onAddBlock(node.id, block)} />
+          </div>
         </div>
       </div>
 
-      {/* Footer: Generate scene */}
+      {/* Footer: Generate scene + permanent delete */}
       <div className="shrink-0 px-4 py-3 border-t border-border">
         <button
           type="button"
@@ -397,6 +409,13 @@ function InspectTab({
           style={{ background: "var(--accent)" }}
         >
           <Sparkles size={14} /> Generate scene
+        </button>
+        <button
+          type="button"
+          onClick={() => onDelete(node.id)}
+          className="mt-2 w-full flex items-center justify-center gap-1.5 py-1.5 rounded-lg text-[12px] font-medium text-muted-foreground hover:text-danger transition-colors"
+        >
+          <Trash2 size={13} /> Delete scene permanently
         </button>
       </div>
     </div>

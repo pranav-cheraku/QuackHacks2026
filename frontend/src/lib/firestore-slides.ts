@@ -42,6 +42,8 @@ export async function loadSlides(): Promise<SlideNode[] | null> {
         width:         data.width,
         height:        data.height,
         root:          parsed.data,
+        kind:          (data.kind as import('./projektor-data').SceneKind) ?? 'title',
+        status:        (data.status as import('./projektor-data').SceneStatus) ?? 'draft',
         // Candidates are static design options — not persisted, merged in on load.
         candidates:    SLIDE_CANDIDATES[d.id] ?? [],
         activeDesignId: SLIDE_CANDIDATES[d.id]?.[0]?.id ?? null,

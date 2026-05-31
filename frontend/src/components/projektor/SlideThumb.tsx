@@ -4,7 +4,7 @@ import { collectLeaves } from "@/lib/ir";
 import { gridToCSS } from "@/lib/grid";
 
 export function SlideThumb({ node }: { node: SlideNode }) {
-  const leaves = [...collectLeaves(node.root)].sort((a, b) => (a.zIndex ?? 0) - (b.zIndex ?? 0));
+  const leaves = [...collectLeaves(node.root!)].sort((a, b) => (a.zIndex ?? 0) - (b.zIndex ?? 0));
   return (
     <div className="relative w-full h-full overflow-hidden bg-white">
       {leaves.map((leaf) => (

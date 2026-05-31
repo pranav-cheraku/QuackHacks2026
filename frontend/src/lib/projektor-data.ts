@@ -30,6 +30,18 @@ export const MEDIA_COMPONENTS: ComponentType[] = [
   "Byline",
 ];
 
+// ── Graph-view scene metadata types ──────────────────────────────────────────
+export type SceneKind = "title" | "problem" | "data";
+export type SceneStatus = "final" | "draft" | "in-review";
+export type SceneRole = "claim" | "evidence" | "data" | "title";
+export type EdgeRelation = "supports" | "contrasts" | "builds-on" | "sequence";
+
+export interface ContentBlock {
+  id: string;
+  type: ComponentType;
+  label: string;
+}
+
 export type SlideState = "rendered" | "ingredient";
 
 export interface SlideCandidate {
@@ -44,26 +56,35 @@ export interface SlideNode {
   title: string;
   x: number;
   y: number;
-  rotation: number;
+  // Editor-required fields (optional so graph-view ghost nodes can omit them)
+  rotation?: number;
+  components?: ComponentType[];
+  root?: LayoutNode;
+  candidates?: SlideCandidate[];
+  activeDesignId?: string | null;
   state: SlideState;
-  components: ComponentType[];
   thumb: "title" | "stats" | "chart" | "list" | "closing";
   width?: number;
   height?: number;
-  root: LayoutNode;
-  candidates: SlideCandidate[];
-  activeDesignId: string | null;
+  // Graph-view metadata (required by graph view for display + filtering)
+  kind: SceneKind;
+  status: SceneStatus;
+  eyebrow?: string;
+  body?: string;
+  role?: SceneRole;
+  locked?: boolean;
+  blocks?: ContentBlock[];
+  ghost?: boolean;
+  discarded?: boolean;
+  rationale?: string;
 }
 
-// GRAPH SYNC: edges are connectors in Graph View. Both views read the same edge state.
-// id    — stable key used by the graph to track connector identity across renders
-// type  — "narrative" (linear story), "branch" (alternate path), "reference" (weak link)
-// dashed — visual hint for Graph View; ignored by Slides View
 export interface Edge {
-  id: string;
+  id?: string;
   from: string;
   to: string;
-  type: "narrative" | "branch" | "reference";
+  type?: "narrative" | "branch" | "reference";
+  relation?: EdgeRelation;
   dashed?: boolean;
 }
 
@@ -93,6 +114,8 @@ export const INITIAL_NODES: SlideNode[] = [
     root: emptyRoot("n1"),
     candidates: [],
     activeDesignId: null,
+    kind: "title",
+    status: "final",
   },
   {
     id: "n2",
@@ -109,6 +132,8 @@ export const INITIAL_NODES: SlideNode[] = [
     root: emptyRoot("n2"),
     candidates: [],
     activeDesignId: null,
+    kind: "data",
+    status: "draft",
   },
   {
     id: "n3",
@@ -125,6 +150,8 @@ export const INITIAL_NODES: SlideNode[] = [
     root: emptyRoot("n3"),
     candidates: [],
     activeDesignId: null,
+    kind: "problem",
+    status: "draft",
   },
   {
     id: "n4",
@@ -141,6 +168,8 @@ export const INITIAL_NODES: SlideNode[] = [
     root: emptyRoot("n4"),
     candidates: [],
     activeDesignId: null,
+    kind: "data",
+    status: "draft",
   },
   {
     id: "n5",
@@ -157,6 +186,8 @@ export const INITIAL_NODES: SlideNode[] = [
     root: emptyRoot("n5"),
     candidates: [],
     activeDesignId: null,
+    kind: "problem",
+    status: "in-review",
   },
   {
     id: "n6",
@@ -173,11 +204,11 @@ export const INITIAL_NODES: SlideNode[] = [
     root: emptyRoot("n6"),
     candidates: [],
     activeDesignId: null,
+    kind: "title",
+    status: "final",
   },
 ];
 
-// GRAPH SYNC: linearization of the default narrative path through all scenes.
-// Graph View renders these as directed connectors between nodes.
 export const INITIAL_EDGES: Edge[] = [
   { id: "e1", from: "n1", to: "n2", type: "narrative" },
   { id: "e2", from: "n2", to: "n3", type: "narrative" },

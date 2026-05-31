@@ -1,302 +1,812 @@
 import { useRef, useState } from "react";
-import { ComponentTray } from "./ComponentTray";
+import { GraphMapPanel } from "./GraphMapPanel";
+import { GraphToolRail } from "./GraphToolRail";
+import { StatusFilterPanel } from "./StatusFilterPanel";
+import { DraggablePanel } from "./DraggablePanel";
+import { Minimap } from "./Minimap";
+import { ScenePanel } from "./ScenePanel";
+import { GhostCard } from "./GhostCard";
+import { GenerateNode } from "./GenerateNode";
+import { ContentGraphView } from "./ContentGraphView";
 import { SlideCard } from "./SlideCard";
-import { VariantCard } from "./VariantCard";
 import {
   INITIAL_NODES,
   INITIAL_EDGES,
-  INITIAL_VARIANTS,
   type SlideNode,
   type Edge,
-  type Variant,
+  type EdgeRelation,
+  type SceneStatus,
+  type SceneRole,
+  type SceneKind,
   type ComponentType,
+  type ContentBlock,
 } from "@/lib/projektor-data";
-import { SLIDE_ELEMENTS } from "@/lib/initial-slides";
-import { Maximize2, Minus, Plus, Sparkles, Search } from "lucide-react";
-import { DEFAULT_ZOOM, ZOOM_STEP, zoomBy } from "@/lib/viewport";
+import { Maximize2, Minus, Plus, Wand2 } from "lucide-react";
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipProvider,
+  TooltipTrigger,
+} from "@/components/ui/tooltip";
 
 interface Props {
   zoom: number;
   setZoom: (z: number) => void;
-  zoomIn: () => void;
-  zoomOut: () => void;
-  isGridVisible: boolean;
   onOpenEditor: (nodeId: string) => void;
+}
+
+// Placeholder chosen spine — real pick logic lands with the branch model.
+const PICKED_PATH = new Set(["n1", "n3"]);
+
+// Placeholder candidate pool — stands in for the AI until a backend exists.
+// Generating a fork pulls the next two from here (cycling).
+const SUGGESTIONS: { title: string; rationale: string; kind: SceneKind }[] = [
+  {
+    title: "Why now — the urgency",
+    rationale: "Follow it with the cost of waiting — it sharpens the ask.",
+    kind: "problem",
+  },
+  {
+    title: "The ask — what we need",
+    rationale:
+      "Go straight to the round size and use of funds while it's fresh.",
+    kind: "title",
+  },
+  {
+    title: "Proof in the numbers",
+    rationale: "Lead with the metric that moved most — let the chart carry it.",
+    kind: "data",
+  },
+  {
+    title: "Who it's for",
+    rationale: "Ground the story in one customer feeling the problem today.",
+    kind: "problem",
+  },
+  {
+    title: "The bigger vision",
+    rationale: "Zoom out to the 10-year picture before landing the close.",
+    kind: "title",
+  },
+  {
+    title: "How it works",
+    rationale: "Show the loop end-to-end so the 'how' is obvious.",
+    kind: "problem",
+  },
+];
+
+// Tidy tree layout: each leaf gets a horizontal slot; each parent is centered
+// over its children; rows by depth. Anchored to the root's current position so
+// the root stays put and the camera doesn't move. Pure — returns new nodes.
+function tidyNodes(ns: SlideNode[], es: Edge[]): SlideNode[] {
+  const childrenMap = new Map<string, string[]>();
+  es.forEach((e) =>
+    childrenMap.set(e.from, [...(childrenMap.get(e.from) ?? []), e.to]),
+  );
+  const hasParent = new Set(es.map((e) => e.to));
+  const byId = new Map(ns.map((n) => [n.id, n]));
+  const widthOf = (id: string) => byId.get(id)?.width ?? 320;
+  const vGap = 300;
+  const gap = 60;
+
+  const centerX = new Map<string, number>();
+  const yOf = new Map<string, number>();
+  const seen = new Set<string>();
+  let cursor = 0;
+
+  const childIds = (id: string) =>
+    (childrenMap.get(id) ?? [])
+      .map((cid) => byId.get(cid))
+      .filter((n): n is SlideNode => Boolean(n))
+      .sort((a, b) => a.index - b.index)
+      .map((n) => n.id);
+
+  const place = (id: string, depth: number): number => {
+    if (seen.has(id)) return centerX.get(id) ?? 0; // cycle guard
+    seen.add(id);
+    yOf.set(id, depth * vGap);
+    const kids = childIds(id);
+    if (kids.length === 0) {
+      const cx = cursor + widthOf(id) / 2;
+      cursor += widthOf(id) + gap;
+      centerX.set(id, cx);
+      return cx;
+    }
+    const kidCenters = kids.map((k) => place(k, depth + 1));
+    const cx = (kidCenters[0] + kidCenters[kidCenters.length - 1]) / 2;
+    centerX.set(id, cx);
+    return cx;
+  };
+
+  const roots = ns
+    .filter((n) => !hasParent.has(n.id))
+    .sort((a, b) => a.index - b.index);
+  (roots.length ? roots : ns.slice(0, 1)).forEach((r) => place(r.id, 0));
+  ns.forEach((n) => place(n.id, 0)); // any orphans
+
+  // Anchor the root's top-left to where it already is.
+  const root = roots[0] ?? ns[0];
+  const rootNewLeft = root
+    ? (centerX.get(root.id) ?? 0) - widthOf(root.id) / 2
+    : 0;
+  const dx = root ? root.x - rootNewLeft : 0;
+  const dy = root ? root.y - (yOf.get(root.id) ?? 0) : 0;
+
+  return ns.map((n) => {
+    const cx = centerX.get(n.id);
+    if (cx == null) return n;
+    return {
+      ...n,
+      x: cx - widthOf(n.id) / 2 + dx,
+      y: (yOf.get(n.id) ?? 0) + dy,
+    };
+  });
 }
 
 function buildPath(
   a: { x: number; y: number },
   b: { x: number; y: number },
 ): string {
-  const dx = b.x - a.x;
+  // Vertical S-curve: flows downward from a (source bottom) to b (target top).
   const dy = b.y - a.y;
-  const cx1 = a.x + dx * 0.4;
-  const cy1 = a.y + dy * 0.15 - Math.abs(dx) * 0.08;
-  const cx2 = a.x + dx * 0.6;
-  const cy2 = b.y - dy * 0.15 + Math.abs(dx) * 0.08;
-  return `M ${a.x} ${a.y} C ${cx1} ${cy1}, ${cx2} ${cy2}, ${b.x} ${b.y}`;
+  const cy1 = a.y + dy * 0.5;
+  const cy2 = b.y - dy * 0.5;
+  return `M ${a.x} ${a.y} C ${a.x} ${cy1}, ${b.x} ${cy2}, ${b.x} ${b.y}`;
 }
 
-function anchor(n: SlideNode, side: "right" | "left" | "bottom") {
-  const w = n.width ?? 280;
-  const h = n.height ?? 170;
+function anchor(n: SlideNode, side: "right" | "left" | "top" | "bottom") {
+  const w = n.width ?? 320;
+  const h = n.height ?? 180;
   if (side === "right") return { x: n.x + w, y: n.y + h / 2 };
   if (side === "left") return { x: n.x, y: n.y + h / 2 };
+  if (side === "top") return { x: n.x + w / 2, y: n.y };
   return { x: n.x + w / 2, y: n.y + h };
 }
 
-export function BoardView({
-  zoom,
-  setZoom,
-  zoomIn,
-  zoomOut,
-  isGridVisible,
-  onOpenEditor,
-}: Props) {
-  const [nodes, setNodes] = useState<SlideNode[]>(() =>
-    INITIAL_NODES.map((node) => ({
-      ...node,
-      elements: SLIDE_ELEMENTS[node.id] ?? [],
-    })),
-  );
-  const [edges] = useState<Edge[]>(INITIAL_EDGES);
-  const [variants, setVariants] = useState<Variant[]>(INITIAL_VARIANTS);
-  const [selected, setSelected] = useState<string | null>("n3");
+export function BoardView({ zoom, setZoom, onOpenEditor }: Props) {
+  const [nodes, setNodes] = useState<SlideNode[]>(INITIAL_NODES);
+  const [edges, setEdges] = useState<Edge[]>(INITIAL_EDGES);
+  const [selected, setSelected] = useState<string | null>("n1");
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set(["n1"]));
+  const [canvasMode, setCanvasMode] = useState<"navigate" | "select">("navigate");
+  const [selectionBox, setSelectionBox] = useState<{ x1: number; y1: number; x2: number; y2: number } | null>(null);
+  const [inspectorOpen, setInspectorOpen] = useState(true);
+  const [contentSceneId, setContentSceneId] = useState<string | null>(null);
   const [pan, setPan] = useState({ x: 0, y: 0 });
+  const [focusPicked, setFocusPicked] = useState(false);
+  const [outlineOpen, setOutlineOpen] = useState(false);
+  const [filterOpen, setFilterOpen] = useState(false);
+  const [minimapOpen, setMinimapOpen] = useState(false);
+  const [activeStatuses, setActiveStatuses] = useState<Set<SceneStatus>>(
+    () => new Set<SceneStatus>(["final", "in-review", "draft"]),
+  );
   const panRef = useRef<{ x: number; y: number } | null>(null);
+  const selBoxOriginRef = useRef<{ cx: number; cy: number } | null>(null);
+  const viewportRef = useRef<HTMLDivElement>(null);
+  const blockSeq = useRef(0); // monotonic ids for added content blocks
+  const genSeq = useRef(0); // monotonic ids for generated candidate nodes
 
   const findNode = (id: string) => nodes.find((n) => n.id === id)!;
 
+  // Selecting a node. additive=true (shift-click) toggles membership in the
+  // multi-selection without changing the inspector's focused node.
+  const selectNode = (id: string, additive = false) => {
+    if (additive) {
+      setSelectedIds((prev) => {
+        const next = new Set(prev);
+        if (next.has(id)) next.delete(id);
+        else next.add(id);
+        return next;
+      });
+    } else {
+      setSelected(id);
+      setSelectedIds(new Set([id]));
+      setInspectorOpen(true);
+    }
+  };
+
+  // --- Inspect-panel updaters ----------------------------------------------
+  const patchNode = (id: string, patch: Partial<SlideNode>) =>
+    setNodes((ns) => ns.map((n) => (n.id === id ? { ...n, ...patch } : n)));
+
+  const setStatus = (id: string, status: SceneStatus) =>
+    patchNode(id, { status });
+  const setRole = (id: string, role: SceneRole) => patchNode(id, { role });
+  const toggleLock = (id: string) =>
+    setNodes((ns) =>
+      ns.map((n) => (n.id === id ? { ...n, locked: !n.locked } : n)),
+    );
+  const addBlock = (id: string, type: ComponentType) => {
+    blockSeq.current += 1;
+    const block: ContentBlock = {
+      id: `${id}-b-${blockSeq.current}`,
+      type,
+      label: type,
+    };
+    setNodes((ns) =>
+      ns.map((n) =>
+        n.id === id ? { ...n, blocks: [...(n.blocks ?? []), block] } : n,
+      ),
+    );
+  };
+  const removeBlock = (id: string, blockId: string) =>
+    setNodes((ns) =>
+      ns.map((n) =>
+        n.id === id
+          ? { ...n, blocks: (n.blocks ?? []).filter((b) => b.id !== blockId) }
+          : n,
+      ),
+    );
+  // Relation lives on the edge into this node; editing it updates the canvas label.
+  const setRelation = (toId: string, relation: EdgeRelation) =>
+    setEdges((es) => es.map((e) => (e.to === toId ? { ...e, relation } : e)));
+
+  // --- Ghost (suggested branch) actions ------------------------------------
+  // Accept = pick this fork: promote it to a committed scene + solidify its
+  // edge, and dim the sibling candidates (same parent) — rejected-but-revisitable.
+  const acceptGhost = (id: string) => {
+    const parentId = edges.find((e) => e.to === id)?.from;
+    const siblingGhostIds = parentId
+      ? nodes
+          .filter(
+            (n) =>
+              n.ghost &&
+              n.id !== id &&
+              edges.some((e) => e.from === parentId && e.to === n.id),
+          )
+          .map((n) => n.id)
+      : [];
+    setNodes((ns) =>
+      ns.map((n) => {
+        if (n.id === id) return { ...n, ghost: false, discarded: false };
+        if (siblingGhostIds.includes(n.id)) return { ...n, discarded: true };
+        return n;
+      }),
+    );
+    setEdges((es) =>
+      es.map((e) => (e.to === id ? { ...e, dashed: false } : e)),
+    );
+  };
+  // Discard: keep it on the canvas but dimmed and revisitable (never deleted).
+  const discardGhost = (id: string) => patchNode(id, { discarded: true });
+  const reconsiderGhost = (id: string) => patchNode(id, { discarded: false });
+
+  // Delete: remove the node (and any subtree under it) for good — unlike
+  // Discard, there's no coming back. Re-tidies what's left.
+  const deleteNode = (id: string) => {
+    const toRemove = new Set<string>([id]);
+    let grew = true;
+    while (grew) {
+      grew = false;
+      edges.forEach((e) => {
+        if (toRemove.has(e.from) && !toRemove.has(e.to)) {
+          toRemove.add(e.to);
+          grew = true;
+        }
+      });
+    }
+    const nextNodes = nodes.filter((n) => !toRemove.has(n.id));
+    const nextEdges = edges.filter(
+      (e) => !toRemove.has(e.from) && !toRemove.has(e.to),
+    );
+    setEdges(nextEdges);
+    setNodes(tidyNodes(nextNodes, nextEdges));
+    if (selected && toRemove.has(selected)) setSelected(null);
+  };
+
+  const selectedNode = selected
+    ? (nodes.find((n) => n.id === selected) ?? null)
+    : null;
+  const parentEdge = selected
+    ? edges.find((e) => e.to === selected)
+    : undefined;
+
+  // A node dims when it's off the picked path (focus), filtered out by status,
+  // or a discarded (rejected-but-revisitable) suggested branch.
+  const isNodeDimmed = (n: SlideNode) =>
+    (focusPicked && !PICKED_PATH.has(n.id)) ||
+    !activeStatuses.has(n.status) ||
+    Boolean(n.discarded);
+  const isEdgeDimmed = (e: Edge) =>
+    isNodeDimmed(findNode(e.from)) || isNodeDimmed(findNode(e.to));
+
+  // A committed leaf slide carries a "Generate next" node just below it — the
+  // affordance that forks the next two candidates. Ghosts can't generate until
+  // they're accepted (picking unlocks Generate next); internal and discarded
+  // nodes don't show it either.
+  const parentIds = new Set(edges.map((e) => e.from));
+  const leafNodes = nodes.filter(
+    (n) => !parentIds.has(n.id) && !n.discarded && !n.ghost,
+  );
+  const GEN_GAP = 32; // gap between a card's bottom and its Generate-next node
+
+  const toggleStatus = (s: SceneStatus) =>
+    setActiveStatuses((prev) => {
+      const next = new Set(prev);
+      if (next.has(s)) next.delete(s);
+      else next.add(s);
+      return next;
+    });
+
+  // Auto-tidy: reflow the tree into a clean layered layout, in place.
+  const autoTidy = () => setNodes((ns) => tidyNodes(ns, edges));
+
+  // Generate: spawn two AI candidate options below a card, then tidy so the
+  // growing tree stays readable. Works on any card — committed or ghost — so
+  // the possibility tree expands by clicking Generate, fork after fork.
+  const generateOptions = (parentId: string) => {
+    const parent = nodes.find((n) => n.id === parentId);
+    if (!parent) return;
+    const maxIndex = nodes.reduce((m, n) => Math.max(m, n.index), 0);
+    const k = genSeq.current;
+    genSeq.current += 2;
+    const picks = [
+      SUGGESTIONS[k % SUGGESTIONS.length],
+      SUGGESTIONS[(k + 1) % SUGGESTIONS.length],
+    ];
+    const newGhosts: SlideNode[] = picks.map((p, i) => ({
+      id: `gen-${genSeq.current}-${i}`,
+      index: maxIndex + 1 + i,
+      title: p.title,
+      kind: p.kind,
+      status: "draft",
+      ghost: true,
+      rationale: p.rationale,
+      // Rough position; tidyNodes overrides it. Required by the type.
+      x: parent.x,
+      y: parent.y + (parent.height ?? 180) + 300,
+      width: 280,
+      height: 168,
+      state: "ingredient",
+      thumb: "list",
+      elements: [],
+      candidates: [],
+      activeDesignId: null,
+    }));
+    const newEdges: Edge[] = newGhosts.map((g) => ({
+      from: parentId,
+      to: g.id,
+      relation: "sequence",
+      dashed: true,
+    }));
+    const nextEdges = [...edges, ...newEdges];
+    setEdges(nextEdges);
+    setNodes(tidyNodes([...nodes, ...newGhosts], nextEdges));
+    selectNode(parentId);
+  };
+
+  // Outline click → select the node and fly the canvas to center it.
+  const jumpTo = (id: string) => {
+    selectNode(id);
+    const n = nodes.find((x) => x.id === id);
+    const vp = viewportRef.current;
+    if (!n || !vp) return;
+    const w = n.width ?? 320;
+    const h = n.height ?? 180;
+    setPan({
+      x: vp.clientWidth / 2 - (n.x + w / 2) * zoom,
+      y: vp.clientHeight / 2 - (n.y + h / 2) * zoom,
+    });
+  };
+
   const onCanvasMouseDown = (e: React.MouseEvent) => {
     if ((e.target as HTMLElement).closest("[data-node]")) return;
-    setSelected(null);
-    panRef.current = { x: e.clientX - pan.x, y: e.clientY - pan.y };
-    const move = (ev: MouseEvent) => {
-      if (!panRef.current) return;
-      setPan({
-        x: ev.clientX - panRef.current.x,
-        y: ev.clientY - panRef.current.y,
+
+    if (canvasMode === "navigate") {
+      setSelected(null);
+      setSelectedIds(new Set());
+      panRef.current = { x: e.clientX - pan.x, y: e.clientY - pan.y };
+      const move = (ev: MouseEvent) => {
+        if (!panRef.current) return;
+        setPan({
+          x: ev.clientX - panRef.current.x,
+          y: ev.clientY - panRef.current.y,
+        });
+      };
+      const up = () => {
+        panRef.current = null;
+        window.removeEventListener("mousemove", move);
+        window.removeEventListener("mouseup", up);
+      };
+      window.addEventListener("mousemove", move);
+      window.addEventListener("mouseup", up);
+    } else {
+      // Select mode — draw a marquee box in canvas space.
+      const vp = viewportRef.current;
+      if (!vp) return;
+      const rect = vp.getBoundingClientRect();
+      const toCanvas = (cx: number, cy: number) => ({
+        x: (cx - rect.left - pan.x) / zoom,
+        y: (cy - rect.top - pan.y) / zoom,
       });
-    };
-    const up = () => {
-      panRef.current = null;
-      window.removeEventListener("mousemove", move);
-      window.removeEventListener("mouseup", up);
-    };
-    window.addEventListener("mousemove", move);
-    window.addEventListener("mouseup", up);
+      const origin = toCanvas(e.clientX, e.clientY);
+      selBoxOriginRef.current = { cx: origin.x, cy: origin.y };
+      setSelectionBox({ x1: origin.x, y1: origin.y, x2: origin.x, y2: origin.y });
+
+      const move = (ev: MouseEvent) => {
+        if (!selBoxOriginRef.current) return;
+        const cur = toCanvas(ev.clientX, ev.clientY);
+        const bx1 = Math.min(selBoxOriginRef.current.cx, cur.x);
+        const by1 = Math.min(selBoxOriginRef.current.cy, cur.y);
+        const bx2 = Math.max(selBoxOriginRef.current.cx, cur.x);
+        const by2 = Math.max(selBoxOriginRef.current.cy, cur.y);
+        setSelectionBox({ x1: selBoxOriginRef.current.cx, y1: selBoxOriginRef.current.cy, x2: cur.x, y2: cur.y });
+        const hits = nodes
+          .filter((n) => {
+            const nw = n.width ?? 320;
+            const nh = n.height ?? 180;
+            return n.x < bx2 && n.x + nw > bx1 && n.y < by2 && n.y + nh > by1;
+          })
+          .map((n) => n.id);
+        setSelectedIds(new Set(hits));
+      };
+      const up = (ev: MouseEvent) => {
+        if (selBoxOriginRef.current) {
+          const cur = toCanvas(ev.clientX, ev.clientY);
+          const bx1 = Math.min(selBoxOriginRef.current.cx, cur.x);
+          const by1 = Math.min(selBoxOriginRef.current.cy, cur.y);
+          const bx2 = Math.max(selBoxOriginRef.current.cx, cur.x);
+          const by2 = Math.max(selBoxOriginRef.current.cy, cur.y);
+          if (bx2 - bx1 <= 4 && by2 - by1 <= 4) {
+            // Plain click (no drag) → deselect all
+            setSelected(null);
+            setSelectedIds(new Set());
+          } else {
+            const hits = nodes
+              .filter((n) => {
+                const nw = n.width ?? 320;
+                const nh = n.height ?? 180;
+                return n.x < bx2 && n.x + nw > bx1 && n.y < by2 && n.y + nh > by1;
+              })
+              .map((n) => n.id);
+            setSelectedIds(new Set(hits));
+            if (hits.length === 1) {
+              setSelected(hits[0]);
+              setInspectorOpen(true);
+            }
+          }
+        }
+        selBoxOriginRef.current = null;
+        setSelectionBox(null);
+        window.removeEventListener("mousemove", move);
+        window.removeEventListener("mouseup", up);
+      };
+      window.addEventListener("mousemove", move);
+      window.addEventListener("mouseup", up);
+    }
   };
 
-  const generateVariants = () => {
-    if (!selected) return;
-    const parent = findNode(selected);
-    if (variants.some((v) => v.parentId === selected)) return;
-    const baseY = parent.y + (parent.height ?? 170) + 120;
-    const baseX = parent.x - 60;
-    setVariants((vs) => [
-      ...vs,
-      {
-        id: `v-${selected}-1`,
-        parentId: selected,
-        x: baseX,
-        y: baseY + 10,
-        rotation: -1.5,
-        layout: "stacked",
-        chosen: false,
-      },
-      {
-        id: `v-${selected}-2`,
-        parentId: selected,
-        x: baseX + 180,
-        y: baseY + 30,
-        rotation: 1,
-        layout: "centered",
-        chosen: true,
-      },
-      {
-        id: `v-${selected}-3`,
-        parentId: selected,
-        x: baseX + 360,
-        y: baseY + 5,
-        rotation: -0.5,
-        layout: "split",
-        chosen: false,
-      },
-    ]);
+  // Frame a set of nodes so the whole tree fits in the viewport, with a
+  // generous margin. The zoom is snapped DOWN to a multiple of 5%.
+  const frameNodes = (list: SlideNode[]) => {
+    const vp = viewportRef.current;
+    if (!vp || list.length === 0) return;
+    const pad = 200; // generous margin → zooms out more
+    const minX = Math.min(...list.map((n) => n.x));
+    const minY = Math.min(...list.map((n) => n.y));
+    const maxX = Math.max(...list.map((n) => n.x + (n.width ?? 320)));
+    const maxY = Math.max(...list.map((n) => n.y + (n.height ?? 180)));
+    const spanX = Math.max(1, maxX - minX);
+    const spanY = Math.max(1, maxY - minY);
+    const raw = Math.min(
+      1,
+      (vp.clientWidth - pad * 2) / spanX,
+      (vp.clientHeight - pad * 2) / spanY,
+    );
+    // snap down to a multiple of 5%, clamped to [30%, 100%]
+    const pct = Math.min(100, Math.max(30, Math.floor((raw * 100) / 5) * 5));
+    const z = pct / 100;
+    setZoom(z);
+    setPan({
+      x: vp.clientWidth / 2 - (minX + spanX / 2) * z,
+      y: vp.clientHeight / 2 - (minY + spanY / 2) * z,
+    });
   };
+
+  // Fit-to-view: move/zoom so the entire tree is visible (no rearrange).
+  const fitToView = () => frameNodes(nodes);
+
+  // Zoom in/out in 5% steps, snapped to multiples of 5.
+  const zoomBy = (dir: number) => {
+    const pct = Math.round((zoom * 100) / 5) * 5;
+    setZoom(Math.min(200, Math.max(30, pct + dir * 5)) / 100);
+  };
+
+  // Drilling into a scene's content swaps the whole board for its content graph.
+  const contentScene = contentSceneId
+    ? (nodes.find((n) => n.id === contentSceneId) ?? null)
+    : null;
+  if (contentScene) {
+    return (
+      <div className="flex-1 flex flex-col min-w-0 relative">
+        <ContentGraphView
+          scene={contentScene}
+          onBack={() => setContentSceneId(null)}
+          onAddBlock={addBlock}
+          onRemoveBlock={removeBlock}
+        />
+      </div>
+    );
+  }
 
   return (
-    <div className="flex-1 flex min-h-0">
-      <ComponentTray />
-
-      <div className="flex-1 flex flex-col min-w-0">
-        {/* Secondary toolbar */}
-        <div className="h-9 border-b border-border bg-chrome flex items-center px-4 gap-4 shrink-0">
-          <span className="text-[11px] font-mono uppercase tracking-wider text-muted-foreground">
-            Deck flow
-          </span>
-          <span className="text-[11px] font-mono text-muted-foreground">
-            {nodes.length} slides ·{" "}
-            {new Set(variants.map((v) => v.parentId)).size} branches
-          </span>
-          <button className="text-[11px] font-semibold text-muted-foreground hover:text-ink ml-2">
-            Auto-arrange
-          </button>
-          <div className="ml-auto flex items-center gap-1.5 px-2 py-1 border border-border rounded-md bg-canvas/40 w-56">
-            <Search size={11} className="text-muted-foreground" />
-            <input
-              placeholder="Find a slide..."
-              className="bg-transparent outline-none text-[11px] flex-1 placeholder:text-muted-foreground/70"
-            />
-          </div>
-        </div>
-
-        {/* Canvas */}
+    <div className="flex-1 flex flex-col min-w-0 relative">
+      {/* Canvas */}
+      <div
+        ref={viewportRef}
+        className={`flex-1 relative overflow-hidden dot-grid ${canvasMode === "navigate" ? "cursor-grab active:cursor-grabbing" : "cursor-crosshair"}`}
+        onMouseDown={onCanvasMouseDown}
+      >
         <div
-          className={`flex-1 relative overflow-hidden cursor-grab active:cursor-grabbing ${isGridVisible ? "dot-grid" : ""}`}
-          onMouseDown={onCanvasMouseDown}
-          onWheel={(e) => {
-            if (!e.ctrlKey && !e.metaKey) return;
-            e.preventDefault();
-            setZoom(zoomBy(zoom, e.deltaY < 0 ? ZOOM_STEP : -ZOOM_STEP));
+          className="absolute origin-top-left"
+          style={{
+            transform: `translate(${pan.x}px, ${pan.y}px) scale(${zoom})`,
+            width: 2400,
+            height: 1200,
           }}
         >
-          <div
-            className="absolute origin-top-left"
-            style={{
-              transform: `translate(${pan.x}px, ${pan.y}px) scale(${zoom})`,
-              width: 2400,
-              height: 1200,
-            }}
+          {/* Edges */}
+          <svg
+            className="absolute inset-0 pointer-events-none overflow-visible"
+            width="2400"
+            height="1200"
           >
-            {/* Edges */}
-            <svg
-              className="absolute inset-0 pointer-events-none overflow-visible"
-              width="2400"
-              height="1200"
-            >
-              <defs>
-                <marker
-                  id="arrowhead"
-                  markerWidth="8"
-                  markerHeight="8"
-                  refX="6"
-                  refY="4"
-                  orient="auto"
-                >
-                  <path
-                    d="M0,0 L6,4 L0,8 Z"
-                    fill="oklch(0.54 0.105 192)"
-                    opacity="0.75"
-                  />
-                </marker>
-              </defs>
-              {edges.map((e, i) => {
-                const a = anchor(findNode(e.from), "right");
-                const b = anchor(findNode(e.to), "left");
-                return (
-                  <path
-                    key={i}
-                    d={buildPath(a, b)}
-                    fill="none"
-                    stroke="oklch(0.54 0.105 192)"
-                    strokeOpacity="0.55"
-                    strokeWidth="1.5"
-                    strokeDasharray={e.dashed ? "5 4" : undefined}
-                    markerEnd="url(#arrowhead)"
-                  />
-                );
-              })}
-              {variants.map((v) => {
-                const parent = findNode(v.parentId);
-                const a = anchor(parent, "bottom");
-                const b = { x: v.x + 80, y: v.y };
-                return (
-                  <path
-                    key={v.id}
-                    d={buildPath(a, b)}
-                    fill="none"
-                    stroke="oklch(0.54 0.105 192)"
-                    strokeOpacity="0.5"
-                    strokeWidth="1.25"
-                    strokeDasharray="4 4"
-                    markerEnd="url(#arrowhead)"
-                  />
-                );
-              })}
-            </svg>
+            <defs>
+              <marker
+                id="arrowhead"
+                markerWidth="8"
+                markerHeight="8"
+                refX="6"
+                refY="4"
+                orient="auto"
+              >
+                <path d="M0,0 L6,4 L0,8 Z" fill="var(--accent)" />
+              </marker>
+            </defs>
+            {edges.map((e, i) => {
+              const a = anchor(findNode(e.from), "bottom");
+              const b = anchor(findNode(e.to), "top");
+              const dim = isEdgeDimmed(e);
+              return (
+                <path
+                  key={i}
+                  d={buildPath(a, b)}
+                  fill="none"
+                  stroke="var(--accent)"
+                  strokeOpacity={dim ? 0.2 : 0.85}
+                  strokeWidth="1.75"
+                  strokeDasharray={e.dashed ? "5 4" : undefined}
+                  markerEnd="url(#arrowhead)"
+                />
+              );
+            })}
+            {/* Short connectors down to each leaf's Generate-next node */}
+            {leafNodes.map((n) => {
+              const cx = n.x + (n.width ?? 320) / 2;
+              const y1 = n.y + (n.height ?? 180);
+              const y2 = y1 + GEN_GAP;
+              return (
+                <path
+                  key={`gen-arrow-${n.id}`}
+                  d={`M ${cx} ${y1} L ${cx} ${y2}`}
+                  fill="none"
+                  stroke="var(--accent)"
+                  strokeOpacity={isNodeDimmed(n) ? 0.2 : 0.55}
+                  strokeWidth="1.75"
+                  strokeDasharray="5 4"
+                  markerEnd="url(#arrowhead)"
+                />
+              );
+            })}
+          </svg>
 
-            {/* Nodes */}
-            {nodes.map((n) => (
+          {/* Edge relation labels */}
+          {edges.map((e, i) => {
+            if (!e.relation) return null;
+            const a = anchor(findNode(e.from), "bottom");
+            const b = anchor(findNode(e.to), "top");
+            const dim = isEdgeDimmed(e);
+            return (
+              <div
+                key={`edge-label-${i}`}
+                className="absolute -translate-x-1/2 -translate-y-1/2 px-2 py-0.5 rounded-full text-[10px] font-medium pointer-events-none transition-opacity"
+                style={{
+                  left: (a.x + b.x) / 2,
+                  top: (a.y + b.y) / 2,
+                  background: "var(--accent-soft)",
+                  color: "var(--accent-press)",
+                  opacity: dim ? 0.3 : 1,
+                }}
+              >
+                {e.relation}
+              </div>
+            );
+          })}
+
+          {/* Nodes */}
+          {nodes.map((n) => {
+            const onMove = (x: number, y: number) =>
+              setNodes((ns) =>
+                ns.map((m) => (m.id === n.id ? { ...m, x, y } : m)),
+              );
+            return (
               <div key={n.id} data-node>
-                <SlideCard
-                  node={n}
-                  selected={selected === n.id}
-                  onSelect={() => setSelected(n.id)}
-                  onOpenEditor={() => onOpenEditor(n.id)}
-                  onMove={(x, y) =>
-                    setNodes((ns) =>
-                      ns.map((m) => (m.id === n.id ? { ...m, x, y } : m)),
-                    )
-                  }
-                  onDropComponent={(c: ComponentType) =>
-                    setNodes((ns) =>
-                      ns.map((m) =>
-                        m.id === n.id
-                          ? {
-                              ...m,
-                              state: "ingredient",
-                              components: [...m.components, c],
-                            }
-                          : m,
-                      ),
-                    )
-                  }
-                  zoom={zoom}
+                {n.ghost ? (
+                  <GhostCard
+                    node={n}
+                    selected={selectedIds.has(n.id)}
+                    dimmed={isNodeDimmed(n)}
+                    onSelect={() => selectNode(n.id)}
+                    onMove={onMove}
+                    onAccept={() => acceptGhost(n.id)}
+                    onDiscard={() => discardGhost(n.id)}
+                    onReconsider={() => reconsiderGhost(n.id)}
+                    onDelete={() => deleteNode(n.id)}
+                    zoom={zoom}
+                  />
+                ) : (
+                  <SlideCard
+                    node={n}
+                    selected={selectedIds.has(n.id)}
+                    dimmed={isNodeDimmed(n)}
+                    onSelect={(shiftKey) => selectNode(n.id, shiftKey)}
+                    onOpenEditor={() => onOpenEditor(n.id)}
+                    onMove={onMove}
+                    zoom={zoom}
+                  />
+                )}
+              </div>
+            );
+          })}
+
+          {/* Generate-next nodes — one per leaf, just below the card */}
+          {leafNodes.map((n) => {
+            const cx = n.x + (n.width ?? 320) / 2;
+            const top = n.y + (n.height ?? 180) + GEN_GAP;
+            return (
+              <div
+                key={`gen-node-${n.id}`}
+                data-node
+                className="absolute"
+                style={{ left: cx - 84, top }}
+              >
+                <GenerateNode
+                  onClick={() => generateOptions(n.id)}
+                  dimmed={isNodeDimmed(n)}
                 />
               </div>
-            ))}
+            );
+          })}
 
-            {variants.map((v) => (
-              <div key={v.id} data-node>
-                <VariantCard v={v} />
-              </div>
-            ))}
-          </div>
+          {/* Marquee selection box (canvas space) */}
+          {selectionBox && (
+            <div
+              className="absolute pointer-events-none border border-(--accent) bg-accent-soft opacity-60"
+              style={{
+                left: Math.min(selectionBox.x1, selectionBox.x2),
+                top: Math.min(selectionBox.y1, selectionBox.y2),
+                width: Math.abs(selectionBox.x2 - selectionBox.x1),
+                height: Math.abs(selectionBox.y2 - selectionBox.y1),
+              }}
+            />
+          )}
+        </div>
 
-          {/* Floating toolbar */}
-          <div className="absolute left-1/2 -translate-x-1/2 bottom-5 flex items-center gap-1 bg-chrome border border-border rounded-full shadow-[0_4px_20px_-6px_oklch(0.4_0.01_175/0.25)] px-1.5 py-1.5">
-            <ToolBtn onClick={zoomOut}>
-              <Minus size={13} />
+        {/* Left tool rail */}
+        <GraphToolRail
+          canvasMode={canvasMode}
+          onSetMode={setCanvasMode}
+          outlineOpen={outlineOpen}
+          filterOpen={filterOpen}
+          onToggleOutline={() => setOutlineOpen((v) => !v)}
+          onToggleFilter={() => setFilterOpen((v) => !v)}
+          focusPicked={focusPicked}
+          onToggleFocus={() => setFocusPicked((v) => !v)}
+          minimapOpen={minimapOpen}
+          onToggleMinimap={() => setMinimapOpen((v) => !v)}
+        />
+
+        {/* Draggable popovers (independent — can be open together) */}
+        {outlineOpen && (
+          <DraggablePanel
+            title="Outline"
+            width={248}
+            defaultPos={{ x: 80, y: 24 }}
+            onClose={() => setOutlineOpen(false)}
+          >
+            <GraphMapPanel
+              nodes={nodes}
+              edges={edges}
+              selectedId={selected}
+              onJump={jumpTo}
+            />
+          </DraggablePanel>
+        )}
+        {filterOpen && (
+          <DraggablePanel
+            title="Status filter"
+            width={224}
+            defaultPos={{ x: 344, y: 24 }}
+            onClose={() => setFilterOpen(false)}
+          >
+            <StatusFilterPanel
+              active={activeStatuses}
+              onToggle={toggleStatus}
+            />
+          </DraggablePanel>
+        )}
+
+        {/* Minimap */}
+        {minimapOpen && (
+          <Minimap
+            nodes={nodes}
+            edges={edges}
+            selectedId={selected}
+            onJump={jumpTo}
+            pan={pan}
+            zoom={zoom}
+            viewportW={viewportRef.current?.clientWidth ?? 0}
+            viewportH={viewportRef.current?.clientHeight ?? 0}
+          />
+        )}
+
+        {/* Right scene panel (Chat / Inspect / Argument) */}
+        {inspectorOpen && (
+          <ScenePanel
+            node={selectedNode}
+            selectedCount={selectedIds.size}
+            parentRelation={parentEdge?.relation ?? null}
+            hasParent={Boolean(parentEdge)}
+            onClose={() => setInspectorOpen(false)}
+            onChangeStatus={setStatus}
+            onChangeRole={setRole}
+            onChangeRelation={setRelation}
+            onToggleLock={toggleLock}
+            onAddBlock={addBlock}
+            onRemoveBlock={removeBlock}
+            onOpenContent={setContentSceneId}
+            onAccept={acceptGhost}
+            onDiscard={discardGhost}
+            onReconsider={reconsiderGhost}
+            onDelete={deleteNode}
+          />
+        )}
+
+        {/* Floating zoom pill */}
+        <TooltipProvider
+          delayDuration={100}
+          skipDelayDuration={0}
+          disableHoverableContent
+        >
+          <div
+            className="absolute left-1/2 -translate-x-1/2 bottom-5 flex items-center gap-1 bg-chrome border border-border rounded-full shadow-[var(--sh-v)] px-1.5 py-1.5"
+            onMouseDown={(e) => e.stopPropagation()}
+          >
+            <ToolBtn label="Zoom out" tip="Zoom out" onClick={() => zoomBy(-1)}>
+              <Minus size={14} />
             </ToolBtn>
-            <span className="px-2 text-[11px] font-mono w-12 text-center">
+            <span className="px-2 text-[12px] font-mono w-12 text-center tabular-nums">
               {Math.round(zoom * 100)}%
             </span>
-            <ToolBtn onClick={zoomIn}>
-              <Plus size={13} />
+            <ToolBtn label="Zoom in" tip="Zoom in" onClick={() => zoomBy(1)}>
+              <Plus size={14} />
             </ToolBtn>
             <div className="w-px h-5 bg-border mx-1" />
             <ToolBtn
-              onClick={() => {
-                setZoom(DEFAULT_ZOOM);
-                setPan({ x: 0, y: 0 });
-              }}
+              label="Auto-tidy"
+              tip="Auto-tidy — rearrange the tree neatly"
+              onClick={autoTidy}
             >
-              <Maximize2 size={13} />
+              <Wand2 size={14} />
             </ToolBtn>
-            <div className="w-px h-5 bg-border mx-1" />
-            <button className="px-3 py-1.5 text-[12px] font-semibold rounded-full hover:bg-canvas/60 transition-colors flex items-center gap-1">
-              <Plus size={12} /> Add slide
-            </button>
-            <button
-              onClick={generateVariants}
-              className="px-3 py-1.5 text-[12px] font-semibold rounded-full text-white transition-opacity hover:opacity-90 flex items-center gap-1.5 ml-1"
-              style={{ background: "var(--accent-teal)" }}
+            <ToolBtn
+              label="Fit to view"
+              tip="Fit to view — zoom so the whole tree is visible"
+              onClick={fitToView}
             >
-              <Sparkles size={12} /> Generate variants
-            </button>
+              <Maximize2 size={14} />
+            </ToolBtn>
           </div>
-        </div>
+        </TooltipProvider>
       </div>
     </div>
   );
@@ -304,17 +814,34 @@ export function BoardView({
 
 function ToolBtn({
   children,
+  label,
+  tip,
   onClick,
 }: {
   children: React.ReactNode;
+  label: string;
+  tip: string;
   onClick?: () => void;
 }) {
   return (
-    <button
-      onClick={onClick}
-      className="w-7 h-7 flex items-center justify-center rounded-full hover:bg-canvas/60 transition-colors text-ink"
-    >
-      {children}
-    </button>
+    <Tooltip>
+      <TooltipTrigger asChild>
+        <button
+          type="button"
+          aria-label={label}
+          onClick={onClick}
+          className="w-7 h-7 flex items-center justify-center rounded-full hover:bg-canvas/60 transition-colors text-ink"
+        >
+          {children}
+        </button>
+      </TooltipTrigger>
+      <TooltipContent
+        side="top"
+        sideOffset={8}
+        className="bg-ink text-white border-0 font-medium"
+      >
+        {tip}
+      </TooltipContent>
+    </Tooltip>
   );
 }

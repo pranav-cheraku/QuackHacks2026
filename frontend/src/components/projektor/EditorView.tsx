@@ -206,13 +206,13 @@ export function EditorView({
 
   const dispatchOp = useCallback(
     (op: SlideEditOp) =>
-      updateSlide(activeId, (s) => ({ ...s, root: applySlideEditOp(s.root, op) })),
+      updateSlide(activeId, (s) => ({ ...s, root: applySlideEditOp(s.root!, op) })),
     [activeId, updateSlide]
   );
 
   const addLeaf = useCallback((leaf: LeafNode) => {
-    const parentId = activeSlide.root.id;
-    const index = collectLeaves(activeSlide.root).length;
+    const parentId = activeSlide.root!.id;
+    const index = collectLeaves(activeSlide.root!).length;
     dispatchOp({ op: "addLeaf", parent: parentId, leaf, index });
     setSelectedElId(leaf.id);
     setEditingElId(null);
@@ -230,7 +230,7 @@ export function EditorView({
 
   const duplicateLeaf = useCallback(
     (id: string) => {
-      const leaf = collectLeaves(activeSlide.root).find((l) => l.id === id);
+      const leaf = collectLeaves(activeSlide.root!).find((l) => l.id === id);
       if (!leaf) return;
       const copy: LeafNode = {
         ...leaf,
@@ -241,8 +241,8 @@ export function EditorView({
           row: Math.min(GRID_ROWS - leaf.placement.rowSpan, leaf.placement.row + SNAP_STEP * 3),
         },
       };
-      const parentId = activeSlide.root.id;
-      dispatchOp({ op: "addLeaf", parent: parentId, leaf: copy, index: collectLeaves(activeSlide.root).length });
+      const parentId = activeSlide.root!.id;
+      dispatchOp({ op: "addLeaf", parent: parentId, leaf: copy, index: collectLeaves(activeSlide.root!).length });
       setSelectedElId(copy.id);
       setRailSelectionActive(false);
     },
@@ -263,6 +263,8 @@ export function EditorView({
       root: emptyRoot(id),
       candidates: [],
       activeDesignId: null,
+      kind: "title" as const,
+      status: "draft" as const,
     };
     // GRAPH SYNC: adding a slide = adding a node. The graph reads from the same slides
     // state and will display it as a new node without any extra wiring.
@@ -366,20 +368,20 @@ export function EditorView({
   };
 
   const bringForward = useCallback((id: string) => {
-    const leaves = collectLeaves(activeSlide.root);
+    const leaves = collectLeaves(activeSlide.root!);
     const maxZ = leaves.reduce((m, l) => Math.max(m, l.zIndex ?? 0), 0);
     dispatchOp({ op: "setZIndex", nodeId: id, zIndex: maxZ + 1 });
   }, [activeSlide.root, dispatchOp]);
 
   const sendBack = useCallback((id: string) => {
-    const leaves = collectLeaves(activeSlide.root);
+    const leaves = collectLeaves(activeSlide.root!);
     const minZ = leaves.reduce((m, l) => Math.min(m, l.zIndex ?? 0), Infinity);
     dispatchOp({ op: "setZIndex", nodeId: id, zIndex: Math.max(0, minZ - 1) });
   }, [activeSlide.root, dispatchOp]);
 
   const applyCandidate = useCallback((candidateId: string) => {
     updateSlide(activeId, (s) => {
-      const cand = s.candidates.find((c) => c.id === candidateId);
+      const cand = (s.candidates ?? []).find((c) => c.id === candidateId);
       if (!cand) return s;
       return { ...s, root: deepCloneWithNewIds(cand.root), activeDesignId: candidateId };
     });
@@ -617,7 +619,7 @@ export function EditorView({
             >
               <GridOverlay visible={isGridVisible} />
 
-              {[...collectLeaves(activeSlide.root)]
+              {[...collectLeaves(activeSlide.root!)]
                 .sort((a, b) => (a.zIndex ?? 0) - (b.zIndex ?? 0))
                 .map((leaf) => (
                   <CanvasElement
@@ -638,7 +640,7 @@ export function EditorView({
                   />
                 ))}
 
-              {collectLeaves(activeSlide.root).length === 0 && (
+              {collectLeaves(activeSlide.root!).length === 0 && (
                 <div
                   className="absolute inset-0 flex flex-col items-center justify-center gap-3 pointer-events-none"
                   style={{ color: "oklch(0.7 0.01 192)" }}
@@ -1102,7 +1104,7 @@ function DesignsPanel({
   slide: import("@/lib/projektor-data").SlideNode;
   onApply: (candidateId: string) => void;
 }) {
-  if (slide.candidates.length === 0) {
+  if ((slide.candidates ?? []).length === 0) {
     return (
       <div className="flex-1 flex flex-col items-center justify-center gap-3 p-5 text-center">
         <LayoutTemplate size={22} className="text-muted-foreground" strokeWidth={1.5} />
@@ -1116,7 +1118,7 @@ function DesignsPanel({
 
   return (
     <div className="flex-1 overflow-y-auto p-2.5 space-y-2.5">
-      {slide.candidates.map((cand) => {
+      {(slide.candidates ?? []).map((cand) => {
         const isActive = slide.activeDesignId === cand.id;
         return (
           <button

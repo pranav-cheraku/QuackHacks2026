@@ -1,9 +1,9 @@
-import { createFileRoute } from "@tanstack/react-router";
+import { createFileRoute, useNavigate } from "@tanstack/react-router";
 import { useEffect, useState } from "react";
 import { TopBar } from "@/components/projektor/TopBar";
-import { StatusBar } from "@/components/projektor/StatusBar";
 import { BoardView } from "@/components/projektor/BoardView";
 import { EditorView } from "@/components/projektor/EditorView";
+import { useAuth } from "@/context/AuthContext";
 import { DEFAULT_ZOOM, ZOOM_STEP, clampZoom, zoomBy } from "@/lib/viewport";
 
 export const Route = createFileRoute("/")({
@@ -21,15 +21,18 @@ export const Route = createFileRoute("/")({
 });
 
 function Projektor() {
-  const [mode, setMode] = useState<"board" | "editor">("editor");
+  const { currentUser, loading } = useAuth();
+  const navigate = useNavigate();
+  const [mode, setMode] = useState<"board" | "editor">("board");
   const [zoom, setZoomState] = useState(DEFAULT_ZOOM);
   const [isGridVisible, setIsGridVisible] = useState(false);
   const [editorStart, setEditorStart] = useState<string | null>(null);
 
-  const setZoom = (nextZoom: number) => setZoomState(clampZoom(nextZoom));
-  const zoomIn = () => setZoomState((current) => zoomBy(current, ZOOM_STEP));
-  const zoomOut = () => setZoomState((current) => zoomBy(current, -ZOOM_STEP));
-  const toggleGrid = () => setIsGridVisible((visible) => !visible);
+  useEffect(() => {
+    if (!loading && !currentUser) {
+      navigate({ to: "/signin" });
+    }
+  }, [loading, currentUser, navigate]);
 
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
@@ -37,33 +40,33 @@ function Projektor() {
       const isZoomIn = e.key === "+" || e.key === "=" || e.code === "NumpadAdd";
       const isZoomOut = e.key === "-" || e.key === "_" || e.code === "NumpadSubtract";
       if (!isZoomIn && !isZoomOut) return;
-
       e.preventDefault();
       if (isZoomIn) setZoomState((current) => zoomBy(current, ZOOM_STEP));
       if (isZoomOut) setZoomState((current) => zoomBy(current, -ZOOM_STEP));
     };
-
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
   }, []);
 
+  if (loading || !currentUser) return null;
+
+  const setZoom = (nextZoom: number) => setZoomState(clampZoom(nextZoom));
+  const toggleGrid = () => setIsGridVisible((v) => !v);
+
   return (
     <div className="h-screen flex flex-col bg-chrome text-ink overflow-hidden">
-      <TopBar mode={mode} setMode={setMode} deckTitle="Q3 Strategy Review" />
+      <TopBar mode={mode} setMode={setMode} />
       {mode === "board" && (
         <BoardView
           zoom={zoom}
           setZoom={setZoom}
-          zoomIn={zoomIn}
-          zoomOut={zoomOut}
-          isGridVisible={isGridVisible}
           onOpenEditor={(id) => {
             setEditorStart(id);
             setMode("editor");
           }}
         />
       )}
-      {/* EditorView stays mounted so useState never resets; display:none hides it in board mode */}
+      {/* EditorView stays mounted so its undo history / edits survive Board↔Slides switches */}
       <div
         className="flex-1 min-h-0 flex flex-col"
         style={{ display: mode === "editor" ? undefined : "none" }}
@@ -76,17 +79,6 @@ function Projektor() {
           toggleGrid={toggleGrid}
         />
       </div>
-      <StatusBar
-        mode={mode}
-        slideCount={6}
-        branchCount={1}
-        zoom={zoom}
-        zoomIn={zoomIn}
-        zoomOut={zoomOut}
-        isGridVisible={isGridVisible}
-        toggleGrid={toggleGrid}
-        deckName="q3-strategy-review.proj"
-      />
     </div>
   );
 }

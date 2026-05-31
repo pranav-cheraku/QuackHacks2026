@@ -20,14 +20,14 @@ export const Route = createFileRoute("/")({
 });
 
 function Projektor() {
-  const [mode, setMode] = useState<"board" | "editor">("board");
+  const [mode, setMode] = useState<"board" | "editor">("editor");
   const [zoom, setZoom] = useState(0.85);
   const [editorStart, setEditorStart] = useState<string | null>(null);
 
   return (
     <div className="h-screen flex flex-col bg-chrome text-ink overflow-hidden">
       <TopBar mode={mode} setMode={setMode} deckTitle="Q3 Strategy Review" />
-      {mode === "board" ? (
+      {mode === "board" && (
         <BoardView
           zoom={zoom}
           setZoom={setZoom}
@@ -36,9 +36,14 @@ function Projektor() {
             setMode("editor");
           }}
         />
-      ) : (
-        <EditorView startNodeId={editorStart} />
       )}
+      {/* EditorView stays mounted so useState never resets; display:none hides it in board mode */}
+      <div
+        className="flex-1 min-h-0 flex flex-col"
+        style={{ display: mode === "editor" ? undefined : "none" }}
+      >
+        <EditorView startNodeId={editorStart} />
+      </div>
       <StatusBar
         mode={mode}
         slideCount={6}

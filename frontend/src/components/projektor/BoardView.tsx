@@ -13,6 +13,7 @@ import { GenerateNode } from "./GenerateNode";
 import { AddContent } from "./AddContent";
 import { SlideCard } from "./SlideCard";
 import { ContentNodeCard } from "./ContentNodeCard";
+import { ContentNodePanel } from "./ContentNodePanel";
 import type { ContentNode } from "@/lib/ir";
 import {
   INITIAL_NODES,
@@ -1139,15 +1140,6 @@ export function BoardView({
                   ),
                 );
               }}
-              onDelete={() => {
-                onContentPoolChange?.(contentPool.filter((c) => c.id !== cn.id));
-                if (selectedContentId === cn.id) setSelectedContentId(null);
-              }}
-              onChange={(updated) => {
-                onContentPoolChange?.(
-                  contentPool.map((c) => (c.id === cn.id ? { ...updated, graphPosition: c.graphPosition } : c)),
-                );
-              }}
             />
           ))}
 
@@ -1277,8 +1269,29 @@ export function BoardView({
           />
         )}
 
-        {/* Right scene panel (Chat / Inspect / Argument) */}
-        {inspectorOpen && (
+        {/* Right panel — content node panel takes priority over scene panel */}
+        {selectedContentId && contentPool ? (
+          (() => {
+            const cn = contentPool.find((c) => c.id === selectedContentId);
+            return cn ? (
+              <ContentNodePanel
+                node={cn}
+                onClose={() => setSelectedContentId(null)}
+                onChange={(updated) => {
+                  onContentPoolChange?.(
+                    contentPool.map((c) =>
+                      c.id === cn.id ? { ...updated, graphPosition: c.graphPosition } : c,
+                    ),
+                  );
+                }}
+                onDelete={() => {
+                  onContentPoolChange?.(contentPool.filter((c) => c.id !== cn.id));
+                  setSelectedContentId(null);
+                }}
+              />
+            ) : null;
+          })()
+        ) : inspectorOpen ? (
           <ScenePanel
             node={selectedNode}
             selectedCount={selectedIds.size}
@@ -1294,7 +1307,7 @@ export function BoardView({
             onReconsider={reconsiderGhost}
             onDelete={deleteNode}
           />
-        )}
+        ) : null}
 
         {/* Floating "Add content" button — creates a ContentNode in the global pool */}
         {onContentPoolChange && (

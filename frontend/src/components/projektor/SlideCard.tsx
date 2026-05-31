@@ -1,14 +1,18 @@
 import { Check } from "lucide-react";
-import { useRef } from "react";
+import { useEffect, useRef } from "react";
 import type { SlideNode, SceneKind, SceneStatus } from "@/lib/projektor-data";
 
 interface Props {
   node: SlideNode;
   selected: boolean;
   dimmed?: boolean;
+  /** Highlight as the live drop target while an arrow is being re-wired. */
+  dropTarget?: boolean;
   onSelect: (shiftKey: boolean) => void;
   onOpenEditor: () => void;
   onMove: (x: number, y: number) => void;
+  /** Reports the card's real rendered height so edges anchor flush to it. */
+  onMeasure?: (height: number) => void;
   zoom: number;
 }
 
@@ -34,13 +38,35 @@ export function SlideCard({
   node,
   selected,
   dimmed = false,
+  dropTarget = false,
   onSelect,
   onOpenEditor,
   onMove,
+  onMeasure,
   zoom,
 }: Props) {
   const dragging = useRef<{ ox: number; oy: number } | null>(null);
   const w = node.width ?? 320;
+
+  // Report the real rendered height (canvas units — clientHeight ignores the
+  // ancestor's scale transform) so edges/affordances anchor flush to the card.
+  const cardRef = useRef<HTMLDivElement>(null);
+  const onMeasureRef = useRef(onMeasure);
+  onMeasureRef.current = onMeasure;
+  useEffect(() => {
+    const el = cardRef.current;
+    if (!el) return;
+    // Skip 0 (e.g. while the board is hidden via display:none) so we keep the
+    // last real height instead of collapsing arrow anchors to the card top.
+    const report = () => {
+      const h = el.offsetHeight;
+      if (h > 0) onMeasureRef.current?.(h);
+    };
+    report();
+    const ro = new ResizeObserver(report);
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, []);
 
   const onMouseDown = (e: React.MouseEvent) => {
     if ((e.target as HTMLElement).closest("[data-no-drag]")) return;
@@ -73,10 +99,13 @@ export function SlideCard({
       onDoubleClick={onOpenEditor}
     >
       <div
+        ref={cardRef}
         className={`rounded-2xl bg-card border transition-all ${
-          selected
-            ? "border-transparent ring-2 ring-[color:var(--accent)] shadow-[var(--sh-v)]"
-            : "border-border shadow-[0_2px_10px_-4px_rgba(40,30,20,0.12)]"
+          dropTarget
+            ? "border-transparent ring-[3px] ring-[color:var(--accent)] shadow-[0_0_0_6px_var(--accent-soft)]"
+            : selected
+              ? "border-transparent ring-2 ring-[color:var(--accent)] shadow-[var(--sh-v)]"
+              : "border-border shadow-[0_2px_10px_-4px_rgba(40,30,20,0.12)]"
         }`}
       >
         {/* Top row: number · eyebrow · check */}

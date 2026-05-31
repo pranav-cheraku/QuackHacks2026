@@ -89,7 +89,13 @@ function Projektor() {
   return (
     <div className="h-screen flex flex-col bg-chrome text-ink overflow-hidden">
       <TopBar mode={mode} setMode={setMode} />
-      {mode === "board" && (
+      {/* Both views stay mounted (hidden via display) so their local state —
+          the graph's nodes/edges/pan and the editor's undo history — survives
+          Board↔Slides switches instead of resetting on unmount. */}
+      <div
+        className="flex-1 min-h-0 flex flex-col"
+        style={{ display: mode === "board" ? undefined : "none" }}
+      >
         <BoardView
           initialNodes={deck}
           initialEdges={deckEdges}
@@ -100,8 +106,7 @@ function Projektor() {
             setMode("editor");
           }}
         />
-      )}
-      {/* EditorView stays mounted so its undo history / edits survive Board↔Slides switches */}
+      </div>
       <div
         className="flex-1 min-h-0 flex flex-col"
         style={{ display: mode === "editor" ? undefined : "none" }}

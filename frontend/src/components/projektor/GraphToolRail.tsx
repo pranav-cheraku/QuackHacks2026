@@ -1,4 +1,12 @@
-import { ListTree, Route, ListFilter, Map as MapIcon, MousePointer2, RectangleHorizontal } from "lucide-react";
+import {
+  ListTree,
+  Route,
+  ListFilter,
+  Map as MapIcon,
+  MousePointer2,
+  Plus,
+  RectangleHorizontal,
+} from "lucide-react";
 import {
   Tooltip,
   TooltipContent,
@@ -17,6 +25,7 @@ interface Props {
   onToggleFocus: () => void;
   minimapOpen: boolean;
   onToggleMinimap: () => void;
+  onNewSlide: () => void;
 }
 
 export function GraphToolRail({
@@ -30,6 +39,7 @@ export function GraphToolRail({
   onToggleFocus,
   minimapOpen,
   onToggleMinimap,
+  onNewSlide,
 }: Props) {
   return (
     <TooltipProvider
@@ -56,6 +66,16 @@ export function GraphToolRail({
           onClick={() => onSetMode("select")}
         >
           <RectangleHorizontal size={18} />
+        </RailButton>
+
+        <div className="w-5 h-px bg-border my-0.5" />
+
+        <RailButton
+          label="New slide"
+          tip="New slide — drops a blank scene you can connect anywhere"
+          onClick={onNewSlide}
+        >
+          <Plus size={18} />
         </RailButton>
 
         <div className="w-5 h-px bg-border my-0.5" />
